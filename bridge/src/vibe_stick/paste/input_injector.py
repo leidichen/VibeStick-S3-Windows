@@ -137,6 +137,12 @@ class WindowsPasteInjector(PasteInjector):
         return PasteResult(True, "Pasted into the focused app")
 
     def _set_clipboard(self, text: str) -> PasteResult:
+        # Fast path: talk to the Windows clipboard directly (a few ms). Spawning PowerShell cost ~0.3 s.
+        if _set_clipboard_native(text):
+            return PasteResult(True, "Clipboard updated")
+        return self._set_clipboard_powershell(text)
+
+    def _set_clipboard_powershell(self, text: str) -> PasteResult:
         command = [
             "powershell",
             "-NoProfile",
@@ -225,3 +231,58 @@ class UnsupportedPasteInjector(PasteInjector):
 
     def press_enter(self) -> PasteResult:
         return PasteResult(False, f"Enter injection is not available on {self.system}")
+
+
+def _set_clipboard_native(text: str) -> bool:
+    """Put Unicode text on the Windows clipboard via the Win32 API. Returns False on any failure."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.EmptyClipboard.restype = wintypes.BOOL
+        user32.CloseClipboard.restype = wintypes.BOOL
+        user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        user32.SetClipboardData.restype = wintypes.HANDLE
+        kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = wintypes.LPVOID
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+        kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalFree.restype = wintypes.HGLOBAL
+
+        gmem_moveable = 0x0002
+        cf_unicodetext = 13
+        data = (text + "\0").encode("utf-16-le")
+
+        # Another app may hold the clipboard for a moment; retry briefly.
+        for _ in range(15):
+            if user32.OpenClipboard(None):
+                break
+            time.sleep(0.02)
+        else:
+            return False
+        try:
+            user32.EmptyClipboard()
+            handle = kernel32.GlobalAlloc(gmem_moveable, len(data))
+            if not handle:
+                return False
+            pointer = kernel32.GlobalLock(handle)
+            if not pointer:
+                kernel32.GlobalFree(handle)
+                return False
+            ctypes.memmove(pointer, data, len(data))
+            kernel32.GlobalUnlock(handle)
+            if not user32.SetClipboardData(cf_unicodetext, handle):
+                kernel32.GlobalFree(handle)
+                return False
+            return True  # the system owns the memory now
+        finally:
+            user32.CloseClipboard()
+    except Exception:  # noqa: BLE001 - any failure falls back to PowerShell
+        return False

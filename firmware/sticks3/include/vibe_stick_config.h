@@ -11,7 +11,7 @@
 #define VIBE_STICK_RECORDING_AUDIO_PATH "/recording/audio"
 #define VIBE_STICK_RECORDING_STOP_PATH "/recording/stop"
 #define VIBE_STICK_STATE_POLL_MS 5000
-#define VIBE_STICK_BATTERY_POLL_MS 30000
+#define VIBE_STICK_BATTERY_POLL_MS 15000
 
 #if __has_include("vibe_stick_secrets.h")
 #include "vibe_stick_secrets.h"

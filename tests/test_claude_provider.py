@@ -6,14 +6,23 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+from vibe_stick.desktop import process_snapshot
 from vibe_stick.protocol.state import AgentStatus
 from vibe_stick.providers import claude
 
 
 class ClaudeProcessDetectionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # The Windows path reads a cached, background-refreshed process snapshot; never leak it between tests.
+        process_snapshot.reset()
+        self.addCleanup(process_snapshot.reset)
+
     def _run_with_ps_output(self, output: str) -> bool:
         completed = mock.Mock(returncode=0, stdout=output)
-        with mock.patch.object(claude.subprocess, "run", return_value=completed):
+        # POSIX: `ps` output through subprocess.run. Windows: the shared process snapshot.
+        with mock.patch.object(claude.subprocess, "run", return_value=completed), mock.patch.object(
+            claude.process_snapshot, "lines", return_value=output.splitlines()
+        ):
             return claude._claude_process_running()
 
     def test_detects_cli_process_by_bare_executable_name(self) -> None:
@@ -28,8 +37,9 @@ class ClaudeProcessDetectionTests(unittest.TestCase):
         )
 
     def test_detects_windows_claude_process(self) -> None:
-        completed = mock.Mock(returncode=0, stdout="claude.exe|C:\\Tools\\claude.exe\n")
-        with mock.patch.object(claude.subprocess, "run", return_value=completed):
+        with mock.patch.object(
+            claude.process_snapshot, "lines", return_value=["claude.exe|C:\\Tools\\claude.exe"]
+        ):
             self.assertTrue(claude._windows_claude_process_running())
 
     def test_does_not_match_unrelated_claude_named_tools(self) -> None:

@@ -33,7 +33,9 @@ It owns:
 - 16 kHz / 16-bit / mono PCM recording from the StickS3 microphone.
 - Uploading PCM to `/recording/audio`.
 - Agent status sounds generated as PCM and played through ES8311/I2S speaker output.
-- Local battery and USB power display from the StickS3 PMIC.
+- Local battery and USB power display from the StickS3 PMIC, with a filtered percentage.
+- Raw battery telemetry uploaded in batches to `POST /battery` (ring buffer while the bridge is unreachable).
+- Landscape / portrait layouts; right-button gestures (click / double / triple / hold).
 
 It does not read account cookies, browser state, API keys, or quota dashboards.
 
@@ -78,7 +80,8 @@ BLE is not part of the current mainline transport. USB is used for flashing and 
 4. User releases the button.
 5. Firmware stops recording, uploads PCM to `/recording/audio`, then posts `/recording/stop`.
 6. Bridge writes a local WAV file, runs ASR, and pastes the transcript when successful.
-7. Recording start and stop do not play agent alert sounds.
+7. A short ready cue plays before the microphone opens; recording start and stop do not play agent alert sounds.
+8. In this fork the bridge cuts the first 130 ms of the PCM, starts recognition as soon as the audio arrives (local SenseVoice first, cloud ASR as fallback) and the device's stop request then just collects the result.
 
 ## Status And Quota
 

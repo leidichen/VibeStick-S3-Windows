@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -13,6 +15,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from vibe_stick.codex.quota import QuotaSnapshot
+from vibe_stick.config.paths import APP_SUPPORT_DIR
+from vibe_stick.desktop.process import hidden_subprocess_kwargs
 
 LOGGER = logging.getLogger(__name__)
 
@@ -66,6 +70,7 @@ def fetch_usage(
     resolved_token = token or resolve_token()
     if not resolved_token:
         LOGGER.info("Claude usage unavailable: no valid OAuth token")
+        maybe_refresh_login_in_background()
         return None
 
     request = urllib.request.Request(
@@ -169,6 +174,7 @@ def to_quota_snapshot(
         quota_7d_remaining=_remaining_percent(usage.seven_day_percent),
         quota_updated_at=snapshot_time.astimezone().strftime("%H:%M"),
         quota_stale=stale,
+        quota_updated_epoch=int(snapshot_time.timestamp()),
     )
 
 
@@ -244,3 +250,96 @@ def _parse_iso_datetime(value: object) -> datetime | None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
 
+
+# --- Self-healing login -------------------------------------------------------------------------
+# The OAuth access token written by Claude Code lives ~8 hours and only the Claude Code CLI renews it.
+# When it has expired, run ONE tiny headless CLI request so the CLI refreshes its own credentials
+# (we never touch the refresh token ourselves). Costs ~10k cached tokens per refresh, i.e. ~3 per day.
+
+REFRESH_MIN_INTERVAL_SECONDS = 20 * 60
+REFRESH_TIMEOUT_SECONDS = 120
+_refresh_lock = threading.Lock()
+_refresh_running = False
+_last_refresh_attempt = 0.0
+
+
+def _refresh_enabled() -> bool:
+    raw = os.environ.get("VIBE_STICK_CLAUDE_TOKEN_REFRESH", "on").strip().lower()
+    return raw not in {"0", "off", "false", "no"}
+
+
+def _credentials_path() -> Path:
+    return Path.home() / ".claude" / ".credentials.json"
+
+
+def credentials_expired(*, now_ms: int | None = None) -> bool:
+    """True only when a stored login exists and its access token is past its expiry."""
+    try:
+        data = json.loads(_credentials_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    if not isinstance(oauth, dict) or not oauth.get("accessToken"):
+        return False
+    expires_at = oauth.get("expiresAt")
+    if not isinstance(expires_at, int):
+        return False
+    return expires_at <= (now_ms if now_ms is not None else int(time.time() * 1000))
+
+
+def _claude_cli() -> str | None:
+    configured = os.environ.get("VIBE_STICK_CLAUDE_CLI", "").strip()
+    return configured or shutil.which("claude")
+
+
+def _run_cli_refresh() -> None:
+    global _refresh_running
+    try:
+        cli = _claude_cli()
+        if not cli:
+            print("claude login refresh skipped: Claude Code CLI not found (set VIBE_STICK_CLAUDE_CLI)", flush=True)
+            return
+        workdir = APP_SUPPORT_DIR / "cli-refresh"
+        workdir.mkdir(parents=True, exist_ok=True)
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+        started = time.monotonic()
+        # --setting-sources project: skip the user's hooks (they play sounds); the login is not a setting.
+        result = subprocess.run(
+            [cli, "-p", "reply with: ok", "--model", "haiku", "--no-session-persistence",
+             "--setting-sources", "project", "--tools", "", "--output-format", "json"],
+            cwd=str(workdir),
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=REFRESH_TIMEOUT_SECONDS,
+            **hidden_subprocess_kwargs(),
+        )
+        still_expired = credentials_expired()
+        print(
+            "claude login refresh "
+            f"exit={result.returncode} took={time.monotonic() - started:.0f}s "
+            f"{'FAILED: login still expired, run `claude` and /login once' if still_expired else 'ok'}",
+            flush=True,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"claude login refresh failed: {exc}", flush=True)
+    finally:
+        _refresh_running = False
+
+
+def maybe_refresh_login_in_background() -> bool:
+    """Start a refresh if the stored login has expired. Rate limited, never blocks. Returns True if started."""
+    global _refresh_running, _last_refresh_attempt
+    if not _refresh_enabled() or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
+        return False
+    if not credentials_expired():
+        return False
+    with _refresh_lock:
+        now = time.monotonic()
+        if _refresh_running or (_last_refresh_attempt and now - _last_refresh_attempt < REFRESH_MIN_INTERVAL_SECONDS):
+            return False
+        _refresh_running = True
+        _last_refresh_attempt = now
+    threading.Thread(target=_run_cli_refresh, name="claude-login-refresh", daemon=True).start()
+    return True

@@ -5,6 +5,7 @@
 #include <sys/time.h>
 
 #include "vibe_audio.h"
+#include "vibe_battery.h"
 #include "vibe_board.h"
 #include "vibe_input.h"
 #include "vibe_stick_config.h"
@@ -49,7 +50,7 @@
 #define LVGL_DRAW_BUF_LINES 24
 #define LVGL_TICK_PERIOD_MS 10
 #define BATTERY_FILL_MAX_WIDTH 20
-#define LCD_SLEEP_TIMEOUT_MS 5000
+/* The backlight never turns off automatically; it is only toggled by the right side button. */
 #define HTTP_CLIENT_BUFFER_SIZE 2048
 #define BRIDGE_HOST_LEN 64
 #define BRIDGE_NAME_LEN 48
@@ -60,6 +61,7 @@
 #define VIBE_STICK_NVS_NAMESPACE "vibestick"
 #define VIBE_STICK_NVS_BRIDGE_HOST "bridge_host"
 #define VIBE_STICK_NVS_BRIDGE_PORT "bridge_port"
+#define VIBE_STICK_NVS_ORIENTATION "orient"
 
 #define PIN_BUTTON_FRONT 11
 #define PIN_BUTTON_SIDE 12
@@ -82,6 +84,7 @@ typedef enum {
     VIBE_STICK_EVENT_BRIDGE_SCAN,
     VIBE_STICK_EVENT_BRIDGE_NEXT,
     VIBE_STICK_EVENT_BRIDGE_SELECT,
+    VIBE_STICK_EVENT_ROTATE_SCREEN,
 } agent_event_type_t;
 
 typedef struct {
@@ -99,6 +102,7 @@ typedef struct {
     const char *key;
     const char *display_name;
     const lv_image_dsc_t *icon;
+    const lv_image_dsc_t *icon_small;
     lv_color_t accent_color;
     bool enabled;
     bool implemented;
@@ -132,6 +136,9 @@ typedef struct {
     bool quota_7d_valid;
     char quota_updated_at[8];
     bool quota_stale;
+    bool quota_age_valid;     /* bridge told us how old the numbers are */
+    int quota_age_s;          /* age at the moment the response arrived */
+    int64_t quota_age_rx_ms;  /* S3 clock at that moment, so the age keeps growing even if the bridge dies */
 } provider_display_state_t;
 
 typedef struct {
@@ -157,6 +164,9 @@ static char s_last_alert_type[24];
 static bool s_alert_sound_baseline_ready;
 static char s_recording_session_id[40];
 static bool s_display_awake = true;
+static int s_orientation; /* 0 portrait, 1 landscape (blue button on the right) */
+static lv_obj_t *s_quota_wrap;
+static lv_obj_t *s_quota_divider;
 static int64_t s_last_user_activity_ms;
 static char s_bridge_host[BRIDGE_HOST_LEN] = VIBE_STICK_BRIDGE_HOST;
 static int s_bridge_port = VIBE_STICK_BRIDGE_PORT;
@@ -247,6 +257,7 @@ static const agent_provider_config_t s_provider_configs[] = {
         .key = "codex",
         .display_name = "Codex",
         .icon = &vibe_stick_provider_codex_icon_40,
+        .icon_small = &vibe_stick_provider_codex_icon_32,
         .accent_color = LV_COLOR_MAKE(0x4d, 0x82, 0xff),
         .enabled = true,
         .implemented = true,
@@ -256,6 +267,7 @@ static const agent_provider_config_t s_provider_configs[] = {
         .key = "claude",
         .display_name = "Claude",
         .icon = &vibe_stick_provider_claude_icon_40,
+        .icon_small = &vibe_stick_provider_claude_icon_32,
         .accent_color = LV_COLOR_MAKE(0xd9, 0x77, 0x57),
         .enabled = true,
         .implemented = true,
@@ -508,16 +520,6 @@ static bool wake_display_and_consume_input(void)
     return true;
 }
 
-static void maybe_sleep_display(void)
-{
-    if (!s_display_awake || s_recording_overlay_visible || vibe_audio_is_recording()) {
-        return;
-    }
-    if (now_ms() - s_last_user_activity_ms >= LCD_SLEEP_TIMEOUT_MS) {
-        set_display_awake(false);
-    }
-}
-
 static void init_backlight(void)
 {
     ledc_timer_config_t timer = {
@@ -550,7 +552,7 @@ static esp_err_t init_display(void)
         .miso_io_num = -1,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = LCD_H_RES * LVGL_DRAW_BUF_LINES * sizeof(lv_color_t),
+        .max_transfer_sz = LCD_V_RES * LVGL_DRAW_BUF_LINES * sizeof(lv_color_t),
     };
     ESP_RETURN_ON_ERROR(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO), TAG, "spi bus");
 
@@ -586,7 +588,7 @@ static esp_err_t init_display(void)
     lv_display_set_user_data(s_display, s_panel);
     lv_display_set_flush_cb(s_display, lvgl_flush_cb);
 
-    size_t buffer_size = LCD_H_RES * LVGL_DRAW_BUF_LINES * sizeof(lv_color_t);
+    size_t buffer_size = LCD_V_RES * LVGL_DRAW_BUF_LINES * sizeof(lv_color_t);
     void *buf = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     ESP_RETURN_ON_FALSE(buf != NULL, ESP_ERR_NO_MEM, TAG, "lvgl buffer");
     lv_display_set_buffers(s_display, buf, NULL, buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
@@ -806,36 +808,29 @@ static void create_ui(void)
     s_status_label = make_label(screen, "待命", FONT_CN, lv_color_hex(0xf3f4f6), 52, LV_TEXT_ALIGN_LEFT);
     lv_obj_align(s_status_label, LV_ALIGN_TOP_LEFT, 82, 73);
 
-    lv_obj_t *quota_wrap = make_plain_obj(screen, LCD_H_RES - 16, 104, lv_color_hex(0x0e1014), LV_OPA_COVER, 8);
-    lv_obj_set_style_border_width(quota_wrap, 1, 0);
-    lv_obj_set_style_border_color(quota_wrap, lv_color_hex(0x22252b), 0);
-    lv_obj_align(quota_wrap, LV_ALIGN_TOP_MID, 0, 118);
+    s_quota_wrap = make_plain_obj(screen, LCD_H_RES - 16, 104, lv_color_hex(0x0e1014), LV_OPA_COVER, 8);
+    lv_obj_set_style_border_width(s_quota_wrap, 1, 0);
+    lv_obj_set_style_border_color(s_quota_wrap, lv_color_hex(0x22252b), 0);
+    lv_obj_align(s_quota_wrap, LV_ALIGN_TOP_MID, 0, 118);
 
-    lv_obj_t *divider = make_plain_obj(quota_wrap, 1, 72, lv_color_hex(0x242832), LV_OPA_COVER, 1);
-    lv_obj_align(divider, LV_ALIGN_CENTER, 0, 10);
-    lv_obj_add_flag(divider, LV_OBJ_FLAG_HIDDEN);
+    s_quota_divider = make_plain_obj(s_quota_wrap, 1, 72, lv_color_hex(0x242832), LV_OPA_COVER, 1);
+    lv_obj_align(s_quota_divider, LV_ALIGN_CENTER, 0, 10);
 
     s_quota_5h_title_label = make_label(screen, "5H --%", &lv_font_montserrat_12,
                                         lv_color_hex(0x8a9099), 44, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_LEFT, 17, 133);
-    lv_obj_add_flag(s_quota_5h_title_label, LV_OBJ_FLAG_HIDDEN);
     s_quota_5h_label = make_label(screen, "--%", &lv_font_montserrat_20, lv_color_hex(0xf3f4f6), 54, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_LEFT, 10, 153);
-    lv_obj_add_flag(s_quota_5h_label, LV_OBJ_FLAG_HIDDEN);
     s_quota_5h_bar = make_bar(screen, 46);
     lv_obj_align(s_quota_5h_bar, LV_ALIGN_TOP_LEFT, 16, 190);
-    lv_obj_add_flag(s_quota_5h_bar, LV_OBJ_FLAG_HIDDEN);
 
     s_quota_7d_title_label = make_label(screen, "7D --%", &lv_font_montserrat_12,
                                         lv_color_hex(0x8a9099), 44, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_quota_7d_title_label, LV_ALIGN_TOP_RIGHT, -17, 133);
-    lv_obj_add_flag(s_quota_7d_title_label, LV_OBJ_FLAG_HIDDEN);
     s_quota_7d_label = make_label(screen, "--%", &lv_font_montserrat_20, lv_color_hex(0xf3f4f6), 54, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_quota_7d_label, LV_ALIGN_TOP_RIGHT, -10, 153);
-    lv_obj_add_flag(s_quota_7d_label, LV_OBJ_FLAG_HIDDEN);
     s_quota_7d_bar = make_bar(screen, 46);
     lv_obj_align(s_quota_7d_bar, LV_ALIGN_TOP_RIGHT, -16, 190);
-    lv_obj_add_flag(s_quota_7d_bar, LV_OBJ_FLAG_HIDDEN);
     s_quota_status_label = make_label(screen, "WAIT", &lv_font_montserrat_10,
                                       lv_color_hex(0x686e78), 84, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_quota_status_label, LV_ALIGN_TOP_MID, 0, 207);
@@ -844,9 +839,10 @@ static void create_ui(void)
     s_computer_title_label = make_label(screen, "电脑", FONT_CN,
                                         lv_color_hex(0x8a9099), 108, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_computer_title_label, LV_ALIGN_TOP_MID, 0, 130);
+    lv_obj_add_flag(s_computer_title_label, LV_OBJ_FLAG_HIDDEN);
     s_computer_name_label = make_wrap_label(screen, "Computer", &lv_font_montserrat_14,
                                             lv_color_hex(0xf3f4f6), 108, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align(s_computer_name_label, LV_ALIGN_TOP_MID, 0, 158);
+    lv_obj_align(s_computer_name_label, LV_ALIGN_TOP_MID, 0, 224);
 
     s_recording_overlay = lv_obj_create(screen);
     lv_obj_set_size(s_recording_overlay, LCD_H_RES, LCD_V_RES);
@@ -900,6 +896,183 @@ static void create_ui(void)
     lv_obj_align(s_bridge_picker_hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 }
 
+typedef struct {
+    bool swap_xy;
+    bool mirror_x;
+    bool mirror_y;
+    int gap_x;
+    int gap_y;
+    int width;
+    int height;
+} orientation_cfg_t;
+
+/* ST7789 135x240 window inside a 240x320 frame memory. Landscape: blue front button on the right. */
+static const orientation_cfg_t s_orientation_cfg[2] = {
+    {.swap_xy = false, .mirror_x = false, .mirror_y = false, .gap_x = 52, .gap_y = 40, .width = 135, .height = 240},
+    {.swap_xy = true, .mirror_x = true, .mirror_y = false, .gap_x = 40, .gap_y = 52, .width = 240, .height = 135},
+};
+
+static void layout_ui(bool landscape)
+{
+    const int w = landscape ? 240 : 135;
+    const int h = landscape ? 135 : 240;
+    lv_obj_set_size(s_recording_overlay, w, h);
+    lv_obj_align(s_recording_overlay, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_size(s_bridge_picker_overlay, w, h);
+    lv_obj_align(s_bridge_picker_overlay, LV_ALIGN_CENTER, 0, 0);
+
+    lv_obj_t *quota_titles[2] = {s_quota_5h_title_label, s_quota_7d_title_label};
+    lv_obj_t *quota_bars[2] = {s_quota_5h_bar, s_quota_7d_bar};
+    lv_obj_t *quota_values[2] = {s_quota_5h_label, s_quota_7d_label};
+
+    if (!landscape) {
+        lv_obj_clear_flag(s_quota_wrap, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_quota_divider, LV_OBJ_FLAG_HIDDEN);
+        for (int i = 0; i < 2; ++i) {
+            lv_obj_set_style_text_font(quota_titles[i], &lv_font_montserrat_12, 0);
+            lv_obj_set_width(quota_titles[i], 44);
+            lv_obj_set_style_text_align(quota_titles[i], LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_size(quota_bars[i], 46, 5);
+            lv_obj_set_style_radius(quota_bars[i], 3, 0);
+            lv_obj_set_style_radius(quota_bars[i], 3, LV_PART_INDICATOR);
+            lv_obj_set_width(quota_values[i], 54);
+            lv_obj_set_style_text_align(quota_values[i], LV_TEXT_ALIGN_CENTER, 0);
+        }
+        lv_obj_align(s_wifi_label, LV_ALIGN_TOP_LEFT, 9, 9);
+        lv_obj_align(s_battery_label, LV_ALIGN_TOP_RIGHT, -35, 9);
+        lv_obj_align(s_battery_icon, LV_ALIGN_TOP_RIGHT, -7, 9);
+        lv_obj_align_to(s_battery_cap, s_battery_icon, LV_ALIGN_OUT_RIGHT_MID, 1, 0);
+        lv_obj_align(s_provider_icon, LV_ALIGN_TOP_LEFT, 18, 52);
+        lv_obj_align(s_status_dot, LV_ALIGN_TOP_LEFT, 72, 80);
+        lv_obj_align(s_provider_label, LV_ALIGN_TOP_LEFT, 72, 51);
+        lv_obj_align(s_status_label, LV_ALIGN_TOP_LEFT, 82, 73);
+        lv_obj_set_size(s_quota_wrap, LCD_H_RES - 16, 104);
+        lv_obj_align(s_quota_wrap, LV_ALIGN_TOP_MID, 0, 118);
+        lv_obj_set_size(s_quota_divider, 1, 72);
+        lv_obj_align(s_quota_divider, LV_ALIGN_CENTER, 0, 10);
+        lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_LEFT, 17, 133);
+        lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_LEFT, 10, 153);
+        lv_obj_align(s_quota_5h_bar, LV_ALIGN_TOP_LEFT, 16, 190);
+        lv_obj_align(s_quota_7d_title_label, LV_ALIGN_TOP_RIGHT, -17, 133);
+        lv_obj_align(s_quota_7d_label, LV_ALIGN_TOP_RIGHT, -10, 153);
+        lv_obj_align(s_quota_7d_bar, LV_ALIGN_TOP_RIGHT, -16, 190);
+        lv_obj_align(s_quota_status_label, LV_ALIGN_TOP_MID, 0, 207);
+        lv_obj_align(s_computer_title_label, LV_ALIGN_TOP_MID, 0, 130);
+        lv_obj_set_width(s_computer_name_label, 108);
+        lv_obj_align(s_computer_name_label, LV_ALIGN_TOP_MID, 0, 224);
+        lv_obj_align(s_recording_wave_group, LV_ALIGN_CENTER, 0, -34);
+        lv_obj_align(s_recording_title, LV_ALIGN_CENTER, 0, 22);
+        lv_obj_align(s_recording_hint, LV_ALIGN_BOTTOM_MID, 0, -22);
+        lv_obj_align(s_bridge_picker_title, LV_ALIGN_TOP_MID, 0, 28);
+        lv_obj_set_width(s_bridge_picker_name, 118);
+        lv_obj_align(s_bridge_picker_name, LV_ALIGN_CENTER, 0, -18);
+        lv_obj_set_width(s_bridge_picker_host, 120);
+        lv_obj_align(s_bridge_picker_host, LV_ALIGN_CENTER, 0, 26);
+        lv_obj_set_width(s_bridge_picker_hint, 130);
+        lv_obj_align(s_bridge_picker_hint, LV_ALIGN_BOTTOM_MID, 0, -18);
+        return;
+    }
+
+    /* Landscape 240x135
+     *   [icon] Claude                 * status
+     *   5H  =========-----------  87%
+     *   7D  =============-------  93%
+     *   WiFi        computer name     battery  */
+    lv_obj_add_flag(s_quota_wrap, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_quota_divider, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_align(s_provider_icon, LV_ALIGN_TOP_LEFT, 12, 6);
+    lv_obj_align(s_provider_label, LV_ALIGN_TOP_LEFT, 52, 13);
+    lv_obj_align(s_status_dot, LV_ALIGN_TOP_LEFT, 164, 19);
+    lv_obj_align(s_status_label, LV_ALIGN_TOP_LEFT, 176, 14);
+
+    static const int row_top[2] = {43, 69};
+    for (int i = 0; i < 2; ++i) {
+        lv_obj_set_style_text_font(quota_titles[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_width(quota_titles[i], 30);
+        lv_obj_set_style_text_align(quota_titles[i], LV_TEXT_ALIGN_LEFT, 0);
+        lv_obj_align(quota_titles[i], LV_ALIGN_TOP_LEFT, 10, row_top[i] + 4);
+
+        lv_obj_set_size(quota_bars[i], 132, 8);
+        lv_obj_set_style_radius(quota_bars[i], 4, 0);
+        lv_obj_set_style_radius(quota_bars[i], 4, LV_PART_INDICATOR);
+        lv_obj_align(quota_bars[i], LV_ALIGN_TOP_LEFT, 44, row_top[i] + 7);
+
+        lv_obj_set_width(quota_values[i], 54);
+        lv_obj_set_style_text_align(quota_values[i], LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_align(quota_values[i], LV_ALIGN_TOP_RIGHT, -8, row_top[i]);
+    }
+
+    lv_obj_align(s_wifi_label, LV_ALIGN_TOP_LEFT, 9, 118);
+    lv_obj_align(s_battery_label, LV_ALIGN_TOP_RIGHT, -35, 118);
+    lv_obj_align(s_battery_icon, LV_ALIGN_TOP_RIGHT, -7, 116);
+    lv_obj_align_to(s_battery_cap, s_battery_icon, LV_ALIGN_OUT_RIGHT_MID, 1, 0);
+    lv_obj_align(s_quota_status_label, LV_ALIGN_TOP_MID, 0, 100);
+    lv_obj_align(s_computer_title_label, LV_ALIGN_TOP_MID, 0, 100);
+    lv_obj_set_width(s_computer_name_label, 120);
+    lv_obj_align(s_computer_name_label, LV_ALIGN_TOP_MID, 0, 114);
+
+    lv_obj_align(s_recording_wave_group, LV_ALIGN_CENTER, 0, -28);
+    lv_obj_align(s_recording_title, LV_ALIGN_CENTER, 0, 22);
+    lv_obj_align(s_recording_hint, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_align(s_bridge_picker_title, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_width(s_bridge_picker_name, 220);
+    lv_obj_align(s_bridge_picker_name, LV_ALIGN_CENTER, 0, -12);
+    lv_obj_set_width(s_bridge_picker_host, 220);
+    lv_obj_align(s_bridge_picker_host, LV_ALIGN_CENTER, 0, 22);
+    lv_obj_set_width(s_bridge_picker_hint, 220);
+    lv_obj_align(s_bridge_picker_hint, LV_ALIGN_BOTTOM_MID, 0, -10);
+}
+
+static void apply_orientation(int orientation)
+{
+    if (orientation < 0 || orientation > 1) {
+        orientation = 0;
+    }
+    const orientation_cfg_t *cfg = &s_orientation_cfg[orientation];
+    lvgl_lock();
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_swap_xy(s_panel, cfg->swap_xy));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_mirror(s_panel, cfg->mirror_x, cfg->mirror_y));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_set_gap(s_panel, cfg->gap_x, cfg->gap_y));
+    lv_display_set_resolution(s_display, cfg->width, cfg->height);
+    s_orientation = orientation;
+    layout_ui(orientation != 0);
+    lv_obj_invalidate(lv_display_get_screen_active(s_display));
+    lvgl_unlock();
+    ESP_LOGI(TAG, "orientation %d (%dx%d)", orientation, cfg->width, cfg->height);
+}
+
+static void load_orientation(void)
+{
+    nvs_handle_t handle = 0;
+    if (nvs_open(VIBE_STICK_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
+        return;
+    }
+    int32_t value = 0;
+    if (nvs_get_i32(handle, VIBE_STICK_NVS_ORIENTATION, &value) == ESP_OK && value >= 0 && value <= 1) {
+        s_orientation = (int)value;
+    }
+    nvs_close(handle);
+}
+
+static void save_orientation(void)
+{
+    nvs_handle_t handle = 0;
+    if (nvs_open(VIBE_STICK_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+        return;
+    }
+    ESP_ERROR_CHECK_WITHOUT_ABORT(nvs_set_i32(handle, VIBE_STICK_NVS_ORIENTATION, s_orientation));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(nvs_commit(handle));
+    nvs_close(handle);
+}
+
+static void rotate_screen(void)
+{
+    apply_orientation((s_orientation + 1) % 2);
+    save_orientation();
+    render_state();
+}
+
 static void set_quota_label(lv_obj_t *bar, lv_obj_t *label, int value, bool valid, lv_color_t accent_color)
 {
     lv_obj_set_style_bg_color(bar, valid ? accent_color : lv_color_hex(0x4b4f57), LV_PART_INDICATOR);
@@ -944,6 +1117,39 @@ static void set_status_color(const agent_provider_config_t *provider, const char
     lv_obj_set_style_bg_color(s_status_dot, color, 0);
 }
 
+/* Bottom line: how old the quota numbers are ("Upd 5m ago"), coloured by how worrying that is.
+ * Falls back to the computer name when the bridge does not report an age (e.g. Codex, or no data yet). */
+static void render_bottom_label(const provider_display_state_t *display_state, bool implemented)
+{
+    if (!implemented || !display_state->quota_age_valid) {
+        lv_label_set_text(s_computer_name_label, s_state.computer_name);
+        lv_obj_set_style_text_color(s_computer_name_label, lv_color_hex(0xf3f4f6), 0);
+        return;
+    }
+    int64_t age = (int64_t)display_state->quota_age_s + (now_ms() - display_state->quota_age_rx_ms) / 1000;
+    if (age < 0) {
+        age = 0;
+    }
+    char text[24];
+    if (age < 60) {
+        snprintf(text, sizeof(text), "Upd <1m ago");
+    } else if (age < 3600) {
+        snprintf(text, sizeof(text), "Upd %dm ago", (int)(age / 60));
+    } else if (age < 48 * 3600) {
+        snprintf(text, sizeof(text), "Upd %dh ago", (int)(age / 3600));
+    } else {
+        snprintf(text, sizeof(text), "Upd %dd ago", (int)(age / 86400));
+    }
+    lv_color_t color = lv_color_hex(0xf3f4f6);  /* fresh: the bridge refreshes every 5 minutes */
+    if (age >= 3600) {
+        color = lv_color_hex(0xf97066);         /* red: the login has most likely expired */
+    } else if (age >= 600) {
+        color = lv_color_hex(0xfdb022);         /* amber: refresh is not getting through */
+    }
+    lv_label_set_text(s_computer_name_label, text);
+    lv_obj_set_style_text_color(s_computer_name_label, color, 0);
+}
+
 static void render_state(void)
 {
     lvgl_lock();
@@ -966,7 +1172,7 @@ static void render_state(void)
                                 0);
     set_battery_ui(s_state.battery, s_state.battery_charging, s_state.usb_powered);
     if (provider->icon) {
-        lv_image_set_src(s_provider_icon, provider->icon);
+        lv_image_set_src(s_provider_icon, (s_orientation != 0 && provider->icon_small) ? provider->icon_small : provider->icon);
         lv_obj_clear_flag(s_provider_icon, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(s_provider_icon, LV_OBJ_FLAG_HIDDEN);
@@ -975,7 +1181,7 @@ static void render_state(void)
     lv_obj_set_style_text_color(s_provider_label, provider->implemented ? lv_color_hex(0xf3f4f6) : lv_color_hex(0xd7d9de), 0);
     lv_label_set_text(s_status_label, status_text);
     set_status_color(provider, status_key);
-    lv_label_set_text(s_computer_name_label, s_state.computer_name);
+    render_bottom_label(display_state, implemented);
     set_quota_title(s_quota_5h_title_label, "5H", quota_stale);
     set_quota_title(s_quota_7d_title_label, "7D", quota_stale);
     set_quota_label(s_quota_5h_bar, s_quota_5h_label, display_state->quota_5h,
@@ -1508,6 +1714,15 @@ static void parse_provider_fields(cJSON *source, provider_display_state_t *targe
         target->quota_7d = quota_value;
     }
     target->quota_stale = cJSON_IsBool(stale) ? cJSON_IsTrue(stale) : false;
+
+    cJSON *age = cJSON_GetObjectItemCaseSensitive(source, "quota_age_s");
+    if (cJSON_IsNumber(age) && age->valuedouble >= 0) {
+        target->quota_age_valid = true;
+        target->quota_age_s = age->valuedouble > 2000000000.0 ? 2000000000 : (int)age->valuedouble;
+        target->quota_age_rx_ms = now_ms();
+    } else {
+        target->quota_age_valid = false;
+    }
 }
 
 static void parse_provider_json(cJSON *state_root, cJSON *provider)
@@ -1594,6 +1809,102 @@ static bool parse_state_json(const char *json)
     return true;
 }
 
+
+/* ---- Battery telemetry -------------------------------------------------------------------------
+ * Every battery poll stores a raw sample (voltages, charge flags, what the screen / speaker were doing).
+ * Samples are uploaded in batches to the bridge, which appends them to a CSV; if the bridge is not
+ * reachable they wait in a ring buffer (oldest dropped first). Each sample carries its age, so no
+ * wall clock is needed on the device. */
+#define BATTERY_RING_SIZE 160
+#define BATTERY_BATCH_MAX 24
+#define BATTERY_UPLOAD_PATH "/battery"
+
+typedef struct {
+    int64_t t_ms;
+    uint16_t bat_mv;
+    uint16_t vin_mv;
+    uint8_t charging;
+    uint8_t usb;
+    uint8_t percent;
+    uint8_t awake;
+    uint8_t recording;
+    int16_t audio_idle_s;
+} battery_sample_t;
+
+static battery_sample_t s_battery_ring[BATTERY_RING_SIZE];
+static int s_battery_ring_head;  /* index of the oldest sample */
+static int s_battery_ring_count;
+
+static void battery_ring_push(const battery_sample_t *sample)
+{
+    if (s_battery_ring_count == BATTERY_RING_SIZE) {
+        s_battery_ring_head = (s_battery_ring_head + 1) % BATTERY_RING_SIZE;
+        s_battery_ring_count--;
+    }
+    s_battery_ring[(s_battery_ring_head + s_battery_ring_count) % BATTERY_RING_SIZE] = *sample;
+    s_battery_ring_count++;
+}
+
+static void record_battery_sample(void)
+{
+    int bat_mv = 0;
+    int vin_mv = 0;
+    if (vibe_board_battery_mv(&bat_mv) != ESP_OK) {
+        return;
+    }
+    if (vibe_board_vin_mv(&vin_mv) != ESP_OK) {
+        vin_mv = 0;
+    }
+    const int64_t now = now_ms();
+    int64_t audio_ms = vibe_audio_last_activity_ms();
+    int64_t idle_s = audio_ms > 0 ? (now - audio_ms) / 1000 : 9999;
+    if (idle_s < 0) {
+        idle_s = 0;
+    } else if (idle_s > 9999) {
+        idle_s = 9999;
+    }
+    const battery_sample_t sample = {
+        .t_ms = now,
+        .bat_mv = (uint16_t)bat_mv,
+        .vin_mv = (uint16_t)vin_mv,
+        .charging = s_state.battery_charging ? 1 : 0,
+        .usb = s_state.usb_powered ? 1 : 0,
+        .percent = (uint8_t)(s_state.battery < 0 ? 0 : (s_state.battery > 100 ? 100 : s_state.battery)),
+        .awake = s_display_awake ? 1 : 0,
+        .recording = vibe_audio_is_recording() ? 1 : 0,
+        .audio_idle_s = (int16_t)idle_s,
+    };
+    battery_ring_push(&sample);
+}
+
+static void upload_battery_samples(void)
+{
+    static char body[2048];
+    while (s_battery_ring_count > 0) {
+        const int batch = s_battery_ring_count < BATTERY_BATCH_MAX ? s_battery_ring_count : BATTERY_BATCH_MAX;
+        const int64_t now = now_ms();
+        int len = snprintf(body, sizeof(body), "{\"s\":[");
+        for (int i = 0; i < batch && len > 0 && len < (int)sizeof(body) - 120; ++i) {
+            const battery_sample_t *s = &s_battery_ring[(s_battery_ring_head + i) % BATTERY_RING_SIZE];
+            len += snprintf(body + len, sizeof(body) - len,
+                            "%s{\"a\":%d,\"b\":%u,\"v\":%u,\"c\":%u,\"u\":%u,\"p\":%u,\"w\":%u,\"r\":%u,\"x\":%d}",
+                            i ? "," : "", (int)((now - s->t_ms) / 1000), s->bat_mv, s->vin_mv, s->charging,
+                            s->usb, s->percent, s->awake, s->recording, s->audio_idle_s);
+        }
+        if (len <= 0 || len >= (int)sizeof(body) - 4) {
+            return;
+        }
+        snprintf(body + len, sizeof(body) - len, "]}");
+        char response[96] = {0};
+        esp_err_t err = bridge_request("POST", BATTERY_UPLOAD_PATH, body, response, sizeof(response));
+        if (err != ESP_OK || strstr(response, "\"ok\"") == NULL) {
+            return;  /* keep the samples for the next attempt */
+        }
+        s_battery_ring_head = (s_battery_ring_head + batch) % BATTERY_RING_SIZE;
+        s_battery_ring_count -= batch;
+    }
+}
+
 static void poll_state(void)
 {
     char response[1536] = {0};
@@ -1601,21 +1912,32 @@ static void poll_state(void)
     static int64_t last_battery_poll_ms = -1;
     bool power_read_ok = false;
     if (last_battery_poll_ms < 0 || current_ms - last_battery_poll_ms >= VIBE_STICK_BATTERY_POLL_MS) {
-        int battery_level = 0;
-        if (vibe_board_battery_level(&battery_level) == ESP_OK) {
-            s_state.battery = battery_level;
-        }
         bool charging = false;
         bool usb_powered = false;
-        if (vibe_board_battery_charging(&charging) == ESP_OK) {
+        const bool charging_ok = vibe_board_battery_charging(&charging) == ESP_OK;
+        if (charging_ok) {
             s_state.battery_charging = charging;
             power_read_ok = true;
         }
-        if (vibe_board_usb_powered(&usb_powered) == ESP_OK) {
+        const bool usb_ok = vibe_board_usb_powered(&usb_powered) == ESP_OK;
+        if (usb_ok) {
             s_state.usb_powered = usb_powered;
             power_read_ok = true;
         }
+        /* The displayed percentage is filtered (median + hysteresis + "charger says full" latch); see vibe_battery.h */
+        int battery_mv = 0;
+        if (charging_ok && usb_ok && vibe_board_battery_mv(&battery_mv) == ESP_OK) {
+            static vibe_battery_t battery_filter;
+            static bool last_full = false;
+            s_state.battery = vibe_battery_update(&battery_filter, battery_mv, charging, usb_powered);
+            const bool full = vibe_battery_is_full(&battery_filter);
+            if (full != last_full) {
+                ESP_LOGI(TAG, "battery full latch=%d mv=%d shown=%d", full, battery_mv, s_state.battery);
+                last_full = full;
+            }
+        }
         last_battery_poll_ms = current_ms;
+        record_battery_sample();
     }
     static bool last_power_logged = false;
     static bool last_charging = false;
@@ -1641,6 +1963,7 @@ static void poll_state(void)
     }
     s_bridge_online = true;
     render_state();
+    upload_battery_samples();
     maybe_handle_alert();
 }
 
@@ -1756,8 +2079,13 @@ static void handle_recording_start(void)
         return;
     }
 
+    const int64_t t_begin = now_ms();
     show_recording_overlay("正在聆听", "松开发送", true);
+    /* Soft "ready" tick BEFORE the mic opens (a tick played while recording would be captured). */
+    (void)vibe_audio_play_sound(VIBE_STICK_SOUND_READY);
+    const int64_t t_beep = now_ms();
     esp_err_t audio_err = vibe_audio_start();
+    const int64_t t_mic = now_ms();
     if (audio_err != ESP_OK) {
         ESP_LOGW(TAG, "hardware recording start failed: %s", esp_err_to_name(audio_err));
         s_recording_session_id[0] = '\0';
@@ -1775,6 +2103,8 @@ static void handle_recording_start(void)
              s_recording_session_id);
     char response[1024] = {0};
     esp_err_t err = bridge_request("POST", VIBE_STICK_RECORDING_START_PATH, body, response, sizeof(response));
+    ESP_LOGI(TAG, "rec_start timing: overlay+beep=%d ms mic_init=%d ms bridge_post=%d ms",
+             (int)(t_beep - t_begin), (int)(t_mic - t_beep), (int)(now_ms() - t_mic));
     if (err == ESP_OK && response[0] != '\0') {
         char response_session_id[40] = {0};
         parse_recording_session_id(response, response_session_id, sizeof(response_session_id));
@@ -1914,11 +2244,47 @@ static void side_button_single_click_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    if (s_bridge_picker_visible) {
+        note_user_activity();
+        queue_event(VIBE_STICK_EVENT_BRIDGE_NEXT);
+        return;
+    }
+    if (!s_display_awake) {
+        note_user_activity(); /* wake */
+        return;
+    }
+    if (s_recording_overlay_visible || vibe_audio_is_recording()) {
+        return; /* never blank the screen while recording */
+    }
+    set_display_awake(false); /* manual screen off */
+}
+
+static void side_button_double_click_cb(void *button_handle, void *usr_data)
+{
+    (void)button_handle;
+    (void)usr_data;
     if (wake_display_and_consume_input()) {
         return;
     }
+    if (s_bridge_picker_visible) {
+        return;
+    }
     note_user_activity();
-    queue_event(s_bridge_picker_visible ? VIBE_STICK_EVENT_BRIDGE_NEXT : VIBE_STICK_EVENT_PROVIDER_NEXT);
+    queue_event(VIBE_STICK_EVENT_PROVIDER_NEXT);
+}
+
+static void side_button_triple_click_cb(void *button_handle, void *usr_data)
+{
+    (void)button_handle;
+    (void)usr_data;
+    if (wake_display_and_consume_input()) {
+        return;
+    }
+    if (s_bridge_picker_visible || s_recording_overlay_visible || vibe_audio_is_recording()) {
+        return;
+    }
+    note_user_activity();
+    queue_event(VIBE_STICK_EVENT_ROTATE_SCREEN);
 }
 
 static void side_button_long_start_cb(void *button_handle, void *usr_data)
@@ -1952,10 +2318,14 @@ static void button_up_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
-    note_user_activity();
     if (s_long_press_active) {
+        note_user_activity();
         s_long_press_active = false;
         queue_event(VIBE_STICK_EVENT_LONG_STOP);
+        return;
+    }
+    if (s_display_awake) {
+        note_user_activity();
     }
 }
 
@@ -1979,7 +2349,12 @@ static esp_err_t init_button(void)
             .press_time = 450,
         },
     };
-    ESP_RETURN_ON_ERROR(iot_button_register_cb(button, BUTTON_LONG_PRESS_START, &long_press_args, button_long_start_cb, NULL),
+    button_event_args_t front_long_press_args = {
+        .long_press = {
+            .press_time = 300,
+        },
+    };
+    ESP_RETURN_ON_ERROR(iot_button_register_cb(button, BUTTON_LONG_PRESS_START, &front_long_press_args, button_long_start_cb, NULL),
                         TAG, "button long");
     ESP_RETURN_ON_ERROR(iot_button_register_cb(button, BUTTON_PRESS_UP, NULL, button_up_cb, NULL),
                         TAG, "button up");
@@ -1993,6 +2368,15 @@ static esp_err_t init_button(void)
     ESP_RETURN_ON_ERROR(iot_button_register_cb(side_button, BUTTON_SINGLE_CLICK, NULL,
                                                side_button_single_click_cb, NULL),
                         TAG, "side button single");
+    ESP_RETURN_ON_ERROR(iot_button_register_cb(side_button, BUTTON_DOUBLE_CLICK, NULL,
+                                               side_button_double_click_cb, NULL),
+                        TAG, "side button double");
+    button_event_args_t triple_click_args = {
+        .multiple_clicks.clicks = 3,
+    };
+    ESP_RETURN_ON_ERROR(iot_button_register_cb(side_button, BUTTON_MULTIPLE_CLICK, &triple_click_args,
+                                               side_button_triple_click_cb, NULL),
+                        TAG, "side button triple");
     ESP_RETURN_ON_ERROR(iot_button_register_cb(side_button, BUTTON_LONG_PRESS_START, &long_press_args,
                                                side_button_long_start_cb, NULL),
                         TAG, "side button long");
@@ -2010,7 +2394,6 @@ static void app_task(void *arg)
             last_poll = now_ms;
             poll_state();
         }
-        maybe_sleep_display();
         if (xQueueReceive(s_event_queue, &event, pdMS_TO_TICKS(100)) != pdTRUE) {
             continue;
         }
@@ -2033,6 +2416,9 @@ static void app_task(void *arg)
             break;
         case VIBE_STICK_EVENT_PROVIDER_NEXT:
             switch_provider();
+            break;
+        case VIBE_STICK_EVENT_ROTATE_SCREEN:
+            rotate_screen();
             break;
         case VIBE_STICK_EVENT_BRIDGE_SCAN:
             start_bridge_scan();
@@ -2060,6 +2446,7 @@ void app_main(void)
     }
 
     load_bridge_target();
+    load_orientation();
     ESP_ERROR_CHECK_WITHOUT_ABORT(vibe_board_init_power());
     s_event_queue = xQueueCreate(10, sizeof(agent_event_t));
     s_lvgl_lock = xSemaphoreCreateMutex();
@@ -2068,6 +2455,7 @@ void app_main(void)
     lvgl_lock();
     create_ui();
     lvgl_unlock();
+    apply_orientation(s_orientation);
     render_state();
     ESP_ERROR_CHECK(init_button());
     ESP_ERROR_CHECK(vibe_audio_init());

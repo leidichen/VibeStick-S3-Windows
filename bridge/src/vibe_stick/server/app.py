@@ -16,6 +16,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from vibe_stick import __version__ as BRIDGE_VERSION
+from vibe_stick.audio import timing
+from vibe_stick.telemetry import BatteryLog
 from vibe_stick.audio.recorder import RecordingController
 from vibe_stick.claude.usage import fetch_usage as fetch_claude_usage
 from vibe_stick.claude.usage import to_quota_snapshot as claude_usage_to_quota
@@ -318,12 +320,24 @@ class BridgeStateStore:
         except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
             return default_state()
 
+    def _quota_age_seconds(self) -> int | None:
+        """Seconds since the active provider's quota numbers were really fetched; None if unknown."""
+        if self._state.provider.id != "claude":
+            return None
+        epoch = self._claude_quota.quota_updated_epoch
+        if epoch <= 0 or not _has_quota(self._claude_quota):
+            return None
+        return max(0, int(time.time()) - epoch)
+
     def _save_state_locked(self) -> None:
+        self._state.provider.quota_age_s = self._quota_age_seconds()
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         STATE_PATH.write_text(json.dumps(self._state.to_jsonable(), indent=2) + "\n")
 
 
 def make_handler(store: BridgeStateStore) -> type[BaseHTTPRequestHandler]:
+    battery_log = BatteryLog()
+
     class VibeStickHandler(BaseHTTPRequestHandler):
         server_version = "VibeStick/0.1"
 
@@ -354,9 +368,12 @@ def make_handler(store: BridgeStateStore) -> type[BaseHTTPRequestHandler]:
                 state = store.refresh_quota()
                 self._send_json({"refreshed": True, "state": state.to_jsonable()})
             elif parsed.path == "/recording/start":
+                timing.reset()
+                timing.mark("start_in")
                 body = self._read_json_body()
                 self._send_json(store.start_recording(body))
             elif parsed.path == "/recording/audio":
+                timing.mark("audio_in")
                 query = parse_qs(parsed.query)
                 content_length = self._content_length()
                 max_audio_bytes = _max_recording_audio_bytes()
@@ -367,18 +384,25 @@ def make_handler(store: BridgeStateStore) -> type[BaseHTTPRequestHandler]:
                     )
                     return
                 pcm = self._read_raw_body(content_length)
-                self._send_json(
-                    store.upload_recording_audio(
-                        pcm,
-                        session_id=_first(query, "session_id"),
-                        sample_rate=_int_header(self.headers.get("X-Vibe-Stick-Sample-Rate"), 16000),
-                        channels=_int_header(self.headers.get("X-Vibe-Stick-Channels"), 1),
-                        bits_per_sample=_int_header(self.headers.get("X-Vibe-Stick-Bits-Per-Sample"), 16),
-                    )
+                timing.mark("audio_body")
+                uploaded = store.upload_recording_audio(
+                    pcm,
+                    session_id=_first(query, "session_id"),
+                    sample_rate=_int_header(self.headers.get("X-Vibe-Stick-Sample-Rate"), 16000),
+                    channels=_int_header(self.headers.get("X-Vibe-Stick-Channels"), 1),
+                    bits_per_sample=_int_header(self.headers.get("X-Vibe-Stick-Bits-Per-Sample"), 16),
                 )
+                timing.mark("store_returned")
+                self._send_json(uploaded)
+                timing.mark("audio_resp_sent")
             elif parsed.path == "/recording/stop":
+                timing.mark("stop_in")
                 body = self._read_json_body()
                 self._send_json(store.stop_recording(body))
+            elif parsed.path == "/battery":
+                body = self._read_json_body()
+                stored = battery_log.append(body.get("s"))
+                self._send_json({"ok": True, "stored": stored})
             else:
                 self._send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint")
 
@@ -458,6 +482,7 @@ def _protected_paths() -> set[str]:
         "/recording/start",
         "/recording/audio",
         "/recording/stop",
+        "/battery",
     }
 
 
@@ -585,6 +610,7 @@ def _stale_quota(existing: QuotaSnapshot) -> QuotaSnapshot:
         quota_7d_remaining=existing.quota_7d_remaining,
         quota_updated_at=existing.quota_updated_at,
         quota_stale=True,
+        quota_updated_epoch=existing.quota_updated_epoch,
     )
 
 

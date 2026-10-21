@@ -5,5 +5,9 @@ description = "Local VibeStick Bridge service for VibeStick."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+# Offline speech recognition (SenseVoice via sherpa-onnx). Needs a downloaded model, see docs/FORK_CHANGES.md.
+local-asr = ["sherpa-onnx", "numpy"]
+
 [project.scripts]
 vibestick-bridge = "vibe_stick.__main__:main"

@@ -1,4 +1,15 @@
 #include "vibe_audio.h"
+#include "esp_timer.h"
+
+/* Optional custom "task done" clip. It is NOT shipped in the repository (its source audio may carry its own
+ * licence): generate src/vibe_done_sound.h from your own WAV with tools/make_done_sound.py. The file is
+ * git-ignored. Without it the original two-tone beep is used. */
+#if defined(__has_include)
+#if __has_include("vibe_done_sound.h")
+#include "vibe_done_sound.h"
+#define VIBE_HAS_CUSTOM_DONE_SOUND 1
+#endif
+#endif
 
 #include <math.h>
 #include <stdatomic.h>
@@ -36,6 +47,7 @@
 static const char *TAG = "vibe_audio";
 
 static atomic_bool s_running;
+static volatile int64_t s_last_activity_ms;
 static bool s_initialized;
 static SemaphoreHandle_t s_audio_mutex;
 static TaskHandle_t s_audio_task;
@@ -228,6 +240,7 @@ static void release_session_resources(void)
 typedef struct {
     int freq_hz;
     int duration_ms;
+    int gain_pct; /* 0 = 100 % */
 } sound_segment_t;
 
 static float sound_envelope(int sample_index, int total_samples)
@@ -266,8 +279,9 @@ static esp_err_t write_sound_segment(const sound_segment_t *segment)
             }
             float phase = VIBE_STICK_TWO_PI * (float)segment->freq_hz *
                           (float)sample_index / (float)VIBE_STICK_AUDIO_SAMPLE_RATE;
+            const float gain = (segment->gain_pct > 0 ? (float)segment->gain_pct : 100.0f) / 100.0f;
             float value = sinf(phase) * sound_envelope(sample_index, total_samples) *
-                          VIBE_STICK_SOUND_VOLUME * 32767.0f;
+                          VIBE_STICK_SOUND_VOLUME * gain * 32767.0f;
             frame[i] = (int16_t)value;
         }
 
@@ -287,6 +301,32 @@ static esp_err_t play_sound_segments(const sound_segment_t *segments, size_t cou
     sound_segment_t tail = {.freq_hz = 0, .duration_ms = 20};
     return write_sound_segment(&tail);
 }
+
+#ifdef VIBE_HAS_CUSTOM_DONE_SOUND
+/* The custom "done" clip is normalized to ~0.92 of full scale, which is too loud on this speaker. */
+#define VIBE_DONE_SOUND_GAIN 0.55f
+
+static esp_err_t play_pcm_clip(const int16_t *pcm, size_t samples)
+{
+    size_t done = 0;
+    int16_t scaled[VIBE_STICK_SOUND_FRAME_SAMPLES];
+    while (done < samples) {
+        size_t n = samples - done;
+        if (n > VIBE_STICK_SOUND_FRAME_SAMPLES) {
+            n = VIBE_STICK_SOUND_FRAME_SAMPLES;
+        }
+        for (size_t i = 0; i < n; ++i) {
+            scaled[i] = (int16_t)((float)pcm[done + i] * VIBE_DONE_SOUND_GAIN);
+        }
+        ESP_RETURN_ON_FALSE(esp_codec_dev_write(s_codec, scaled, (int)(n * sizeof(int16_t))) ==
+                                ESP_CODEC_DEV_OK,
+                            ESP_FAIL, TAG, "speaker write");
+        done += n;
+    }
+    sound_segment_t tail = {.freq_hz = 0, .duration_ms = 40};
+    return write_sound_segment(&tail);
+}
+#endif /* VIBE_HAS_CUSTOM_DONE_SOUND */
 
 static const sound_segment_t *sound_segments_for(agent_sound_t sound, size_t *count)
 {
@@ -308,7 +348,20 @@ static const sound_segment_t *sound_segments_for(agent_sound_t sound, size_t *co
         {.freq_hz = 800, .duration_ms = 100},
     };
 
+    /* "Ready" cue played right before the microphone opens: two short rising tones, preceded by 100 ms of
+     * silence because the speaker amplifier swallows the first ~100 ms after it is enabled (a bare 45 ms
+     * tick was inaudible). 880 / 1320 Hz are clearly audible on this tiny speaker (1900 Hz was not). */
+    static const sound_segment_t ready[] = {
+        {.freq_hz = 0, .duration_ms = 100},
+        {.freq_hz = 880, .duration_ms = 70, .gain_pct = 100},
+        {.freq_hz = 0, .duration_ms = 25},
+        {.freq_hz = 1320, .duration_ms = 100, .gain_pct = 100},
+    };
+
     switch (sound) {
+    case VIBE_STICK_SOUND_READY:
+        *count = sizeof(ready) / sizeof(ready[0]);
+        return ready;
     case VIBE_STICK_SOUND_DONE:
         *count = sizeof(done) / sizeof(done[0]);
         return done;
@@ -410,8 +463,14 @@ esp_err_t vibe_audio_start(void)
         return ESP_ERR_NO_MEM;
     }
     xSemaphoreGive(s_audio_mutex);
+    s_last_activity_ms = esp_timer_get_time() / 1000;
     ESP_LOGI(TAG, "recording started");
     return ESP_OK;
+}
+
+int64_t vibe_audio_last_activity_ms(void)
+{
+    return atomic_load(&s_running) ? esp_timer_get_time() / 1000 : s_last_activity_ms;
 }
 
 esp_err_t vibe_audio_stop(void)
@@ -419,6 +478,7 @@ esp_err_t vibe_audio_stop(void)
     if (!atomic_load(&s_running)) {
         return ESP_OK;
     }
+    s_last_activity_ms = esp_timer_get_time() / 1000;
     atomic_store(&s_running, false);
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(TASK_EXIT_WAIT_MS);
     while (s_audio_task != NULL) {
@@ -452,11 +512,19 @@ esp_err_t vibe_audio_play_sound(agent_sound_t sound)
         return ESP_ERR_INVALID_STATE;
     }
 
+#ifdef VIBE_HAS_CUSTOM_DONE_SOUND
+    const bool use_clip = (sound == VIBE_STICK_SOUND_DONE);
+#else
+    const bool use_clip = false;
+#endif
     size_t segment_count = 0;
-    const sound_segment_t *segments = sound_segments_for(sound, &segment_count);
-    if (!segments || segment_count == 0) {
-        xSemaphoreGive(s_audio_mutex);
-        return ESP_ERR_INVALID_ARG;
+    const sound_segment_t *segments = NULL;
+    if (!use_clip) {
+        segments = sound_segments_for(sound, &segment_count);
+        if (!segments || segment_count == 0) {
+            xSemaphoreGive(s_audio_mutex);
+            return ESP_ERR_INVALID_ARG;
+        }
     }
 
     esp_err_t err = vibe_board_speaker_set_enabled(true);
@@ -467,11 +535,17 @@ esp_err_t vibe_audio_play_sound(agent_sound_t sound)
         err = init_codec(ESP_CODEC_DEV_TYPE_OUT, ESP_CODEC_DEV_WORK_MODE_DAC);
     }
     if (err == ESP_OK) {
+#ifdef VIBE_HAS_CUSTOM_DONE_SOUND
+        err = use_clip ? play_pcm_clip(VIBE_DONE_SOUND_PCM, VIBE_DONE_SOUND_SAMPLES)
+                       : play_sound_segments(segments, segment_count);
+#else
         err = play_sound_segments(segments, segment_count);
+#endif
     }
 
     release_session_resources();
     ESP_ERROR_CHECK_WITHOUT_ABORT(vibe_board_speaker_set_enabled(false));
+    s_last_activity_ms = esp_timer_get_time() / 1000;
     xSemaphoreGive(s_audio_mutex);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "sound playback failed: %s", esp_err_to_name(err));

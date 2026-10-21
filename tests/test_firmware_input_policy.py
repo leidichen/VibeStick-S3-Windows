@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -10,6 +11,9 @@ FIRMWARE_INCLUDE = ROOT / "firmware" / "sticks3" / "include"
 
 class FirmwareInputPolicyTests(unittest.TestCase):
     def test_sleeping_display_consumes_first_input_for_wake_only(self) -> None:
+        compiler = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+        if compiler is None:
+            self.skipTest("no C compiler (cc/gcc/clang) on PATH")
         source = """
 #include <assert.h>
 #include "vibe_input.h"
@@ -24,7 +28,7 @@ int main(void) {
             executable = Path(tmp) / "input_policy_test"
             result = subprocess.run(
                 [
-                    "cc",
+                    compiler,
                     "-std=c11",
                     "-Werror",
                     f"-I{FIRMWARE_INCLUDE}",

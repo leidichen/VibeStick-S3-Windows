@@ -14,6 +14,7 @@ typedef enum {
     VIBE_STICK_SOUND_DONE,
     VIBE_STICK_SOUND_ERROR,
     VIBE_STICK_SOUND_APPROVAL,
+    VIBE_STICK_SOUND_READY, /* soft tick: recording is about to start, speak now */
 } agent_sound_t;
 
 esp_err_t vibe_audio_init(void);
@@ -21,5 +22,6 @@ esp_err_t vibe_audio_start(void);
 esp_err_t vibe_audio_stop(void);
 esp_err_t vibe_audio_play_sound(agent_sound_t sound);
 bool vibe_audio_is_recording(void);
+int64_t vibe_audio_last_activity_ms(void); /* esp_timer ms of the last sound / recording start / stop, 0 = never */
 const uint8_t *vibe_audio_data(size_t *len);
 void vibe_audio_clear(void);

@@ -17,7 +17,7 @@ Firmware: install ESP-IDF v5.5.x (see README), then `cd firmware/sticks3 && idf.
 CI runs the bridge checks on every push / PR.
 
 ## Guidelines
-- No third-party Python dependencies — the bridge uses only the standard library; keep it that way.
+- The bridge core uses only the Python standard library; keep it that way. The only third-party packages are the optional `local-asr` extra (`sherpa-onnx`, `numpy`), imported lazily so the bridge works without them.
 - Never commit secrets — keep keys/tokens/Wi-Fi creds in the gitignored `.env` and
   `vibe_stick_secrets.h`; don't log tokens or raw API responses.
 - Match the surrounding code style; add/update tests for behavior changes.

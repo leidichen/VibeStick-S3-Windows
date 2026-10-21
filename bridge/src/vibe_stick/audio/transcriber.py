@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from vibe_stick.audio import local_asr
 from vibe_stick.config.paths import APP_SUPPORT_DIR
 
 GROQ_ASR_BASE_URL = "https://api.groq.com/openai/v1"
@@ -36,6 +37,9 @@ class TranscriptionAdapter:
     command can be configured with VIBE_STICK_TRANSCRIBE_CMD and should print
     the final transcript to stdout.
     """
+
+    def __init__(self) -> None:
+        local_asr.preload()
 
     def transcribe(
         self,
@@ -109,6 +113,23 @@ class TranscriptionAdapter:
                 message="No audio file available for transcription",
                 source="none",
             )
+
+        if local_asr.enabled():
+            ok, text_or_error = local_asr.transcribe(audio_file)
+            if ok:
+                if text_or_error:
+                    return TranscriptionResult(
+                        text=text_or_error,
+                        success=True,
+                        message="Transcript supplied by local SenseVoice ASR",
+                        source="local-sensevoice",
+                    )
+                return TranscriptionResult(
+                    success=False,
+                    message="Local SenseVoice ASR returned no transcript",
+                    source="local-sensevoice",
+                )
+            print(f"local ASR failed, using cloud ASR: {text_or_error}", flush=True)
 
         config = _load_asr_config()
         if config.get("provider") not in {"groq", "openai-compatible"} or not config.get("api_key"):

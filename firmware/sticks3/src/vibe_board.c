@@ -188,6 +188,26 @@ esp_err_t vibe_board_battery_level(int *level_percent)
     return ESP_OK;
 }
 
+esp_err_t vibe_board_battery_mv(int *millivolts)
+{
+    ESP_RETURN_ON_FALSE(millivolts != NULL, ESP_ERR_INVALID_ARG, TAG, "null mv");
+    ESP_RETURN_ON_FALSE(s_pmic_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "pmic missing");
+    uint8_t data[2] = {0};
+    ESP_RETURN_ON_ERROR(read_regs(M5PM1_REG_BAT_L, data, sizeof(data)), TAG, "read bat mv");
+    *millivolts = (data[1] << 8) | data[0];
+    return ESP_OK;
+}
+
+esp_err_t vibe_board_vin_mv(int *millivolts)
+{
+    ESP_RETURN_ON_FALSE(millivolts != NULL, ESP_ERR_INVALID_ARG, TAG, "null mv");
+    ESP_RETURN_ON_FALSE(s_pmic_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "pmic missing");
+    uint8_t data[2] = {0};
+    ESP_RETURN_ON_ERROR(read_regs(M5PM1_REG_VIN_L, data, sizeof(data)), TAG, "read vin mv");
+    *millivolts = (data[1] << 8) | data[0];
+    return ESP_OK;
+}
+
 esp_err_t vibe_board_battery_charging(bool *charging)
 {
     ESP_RETURN_ON_FALSE(charging != NULL, ESP_ERR_INVALID_ARG, TAG, "null charging");

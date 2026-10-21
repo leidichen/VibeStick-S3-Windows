@@ -12,6 +12,7 @@ class QuotaSnapshot:
     quota_7d_remaining: int | None = None
     quota_updated_at: str = ""
     quota_stale: bool = False
+    quota_updated_epoch: int = 0  # unix seconds of the last successful fetch, 0 = unknown
 
     def to_jsonable(self) -> dict[str, Any]:
         return asdict(self)
@@ -27,12 +28,20 @@ def load_quota(path: Path) -> QuotaSnapshot:
         quota_7d_remaining=_percent_or_none(data.get("quota_7d_remaining")),
         quota_updated_at=str(data.get("quota_updated_at") or ""),
         quota_stale=bool(data.get("quota_stale", False)),
+        quota_updated_epoch=_int_or_zero(data.get("quota_updated_epoch")),
     )
 
 
 def save_quota(path: Path, snapshot: QuotaSnapshot) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(snapshot.to_jsonable(), indent=2) + "\n")
+
+
+def _int_or_zero(value: object) -> int:
+    try:
+        return max(0, int(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
 
 
 def _percent_or_none(value: object) -> int | None:

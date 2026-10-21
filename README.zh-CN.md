@@ -10,6 +10,26 @@ VibeStick 把 M5Stack StickS3 变成一个桌面 AI agent 小终端：显示状�
 
 VibeStick 面向 M5Stack StickS3，不是 M5Stack 官方项目。Codex、Claude 等第三方 agent 名称只用于说明本地兼容工具和集成。
 
+> **关于这个 fork。** 这是 [GaryGaryyy/VibeStick](https://github.com/GaryGaryyy/VibeStick) 的 Windows 向 fork,基于
+> [280342193/VibeStick-1](https://github.com/280342193/VibeStick-1)(它加入了 Windows bridge)。这里新增:稳定的电量百分比、
+> 只有*你*手动才会熄灭的屏幕、右侧键手势、横屏布局、录音前的"准备"提示音、可选的离线语音识别、Claude 额度的"数据多久前更新"
+> 提示、电池遥测,以及一批 bridge 修复。**与上游的全部差异(含原因、数据和已知限制)见
+> [docs/FORK_CHANGES.zh-CN.md](docs/FORK_CHANGES.zh-CN.md)**([English](docs/FORK_CHANGES.md))。想在 Windows 上刷机并运行,从
+> [Windows 快速上手](docs/WINDOWS_QUICKSTART.zh-CN.md)([English](docs/WINDOWS_QUICKSTART.md))开始。
+
+### 按键速查(这个 fork)
+
+| 按键 | 手势 | 功能 |
+|---|---|---|
+| 蓝色正面键 | 长按(300 ms) | 先响提示音,按住录音,松开后识别并粘贴 |
+| 蓝色正面键 | 单击 / 双击 | 在电脑上按回车 / 刷新额度 |
+| 右侧键 | **单击** | **亮屏 / 息屏**(屏幕不会自己熄灭) |
+| 右侧键 | **双击** | **切换 provider**(Codex ⇄ Claude) |
+| 右侧键 | **连按三下** | **竖屏 ⇄ 横屏** |
+| 右侧键 | 长按 | 搜索局域网内的电脑 |
+
+细节、电量百分比算法、声音和配置:[docs/FORK_CHANGES.zh-CN.md](docs/FORK_CHANGES.zh-CN.md)。
+
 完整的刷入、使用、Windows 后台安装、多电脑切换和排障步骤见：[中文使用、刷入与排障指南](docs/USAGE.zh-CN.md)。
 
 ## 开始前的准备
@@ -290,8 +310,8 @@ idf.py build
 
 - 这是整理后的原型，不是打包好的 Mac app 或 DMG。
 - 固件只面向 M5Stack StickS3。
-- 当前稳定首页优先显示 provider 状态和电脑名称；5H/7D 额度仍保留在 bridge 状态里，但暂不显示在屏幕上。
-- 屏幕亮度比之前更低，空闲 5 秒后关闭背光，固件默认 CPU 频率为 80 MHz。
+- 首页显示 provider 状态、5H/7D 额度条,以及下方的数据新旧提示(`Upd 5m ago`);见 [docs/FORK_CHANGES.zh-CN.md](docs/FORK_CHANGES.zh-CN.md)。
+- 背光会一直亮着,直到你按一下右侧键(上游是 5 秒后自动关闭);固件默认 CPU 频率为 80 MHz。电池只有 250 mAh,桌面使用请接 USB 供电。
 - Windows 支持目前是脚本形式，需要 Python 3.11+；不是签名安装包。
 - Codex quota 来自本地 Codex session JSONL 里的 `rate_limits`，不是官方 quota API。
 - Claude usage 来自未公开的 Claude Code OAuth endpoint，默认关闭。

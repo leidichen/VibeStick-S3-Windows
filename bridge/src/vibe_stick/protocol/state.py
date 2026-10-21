@@ -42,6 +42,7 @@ class ProviderState:
     quota_7d_remaining: int | None = None
     quota_updated_at: str = ""
     quota_stale: bool = False
+    quota_age_s: int | None = None  # age of the quota numbers in seconds, computed when the state is saved
 
 
 @dataclass

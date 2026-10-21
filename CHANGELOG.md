@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased (fork)
+
+Firmware (StickS3)
+- Right button: click = screen on/off, double click = switch provider, triple click = portrait/landscape, hold = search computers. Blue button swallowed while the screen is off.
+- The backlight no longer turns off after 5 s; only the right button switches it off. Alerts and key presses wake it.
+- Landscape layout (blue button on the right), remembered across reboots; full-width 5H/7D bars.
+- Home screen shows the Claude 5H/7D quota again, with an `Upd 5m ago` line (amber after 10 min, red after 1 h) counted on the device clock.
+- Battery percentage: median of 5 readings, "charger says full" latch (100 % on the charge plateau), hysteresis. New pure-C module with a host test that can replay a recorded log.
+- Blue button hold threshold 450 -> 300 ms; a two-tone ready cue plays before the microphone opens.
+- Optional custom "done" clip (`make_done_sound.py`); the default is the original beep. No audio is shipped.
+- Battery telemetry: raw samples every 15 s, batched upload to the bridge, ring buffer while offline.
+
+Bridge
+- Local offline speech recognition (SenseVoice through sherpa-onnx, optional extra `local-asr`) with the cloud ASR as automatic fallback.
+- Recognition starts as soon as the audio arrives (prefetch); the first 130 ms of every device recording are cut (microphone start-up DC step).
+- Fix: the Claude "task finished" alert was intermittently swallowed by bookkeeping `system` records and by activity in other sessions.
+- Session files are cached by (mtime, size) and process detection runs in one shared background snapshot: idle CPU ~7 % -> ~0.9 % of a core, `GET /state` ~270 ms -> ~36 ms.
+- Windows paste writes the clipboard through the Win32 API instead of spawning PowerShell.
+- Claude usage: real fetch timestamp (`provider.quota_age_s`), and a background renewal of the expired Claude Code login through one tiny headless `claude -p` call (`VIBE_STICK_CLAUDE_TOKEN_REFRESH`).
+- `POST /battery` (token protected), `battery_log.csv`, `bridge/tools/battery_report.py`.
+- Per-recording `timing` log line.
+
+Docs and tests
+- New: `docs/FORK_CHANGES.md` (+ zh-CN), `docs/WINDOWS_QUICKSTART.md` (+ zh-CN); outdated statements about the 5-second backlight timeout, provider switching and recording sounds corrected.
+- New tests for the alert fix, session cache, battery telemetry, login renewal, local ASR fallback, recording trim and the C battery filter; two existing tests updated for the shared process snapshot or made to skip without a C compiler.
+
 ## v0.1.12
 
 - Improve Windows Codex/ChatGPT/Claude detection and preserve recent task status and alert events even when an agent process exits before the next poll.

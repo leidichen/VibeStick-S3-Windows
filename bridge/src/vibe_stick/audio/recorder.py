@@ -8,13 +8,15 @@ import struct
 import subprocess
 import time
 import wave
+import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from vibe_stick.audio.transcriber import TranscriptionAdapter
+from vibe_stick.audio import timing
+from vibe_stick.audio.transcriber import TranscriptionAdapter, TranscriptionResult
 from vibe_stick.config.paths import RECORDINGS_DIR
 from vibe_stick.desktop.hud import hide_hud, show_hud
 from vibe_stick.paste.input_injector import make_paste_injector
@@ -66,6 +68,7 @@ class RecordingController:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.transcriber = TranscriptionAdapter()
+        self._prefetch: dict[str, Any] | None = None
         self.paste_injector = make_paste_injector()
         self.audio_recorder = MacMicRecorder()
         self.session = self._load()
@@ -152,6 +155,7 @@ class RecordingController:
             self._save()
             return self.session
 
+        pcm = _trim_mic_startup(pcm, sample_rate, channels)
         RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
         sid = self.session.session_id or session_id or uuid.uuid4().hex
         audio_file = RECORDINGS_DIR / f"{sid}.wav"
@@ -164,8 +168,13 @@ class RecordingController:
         self.session.audio_file = str(audio_file)
         self.session.audio_source = "sticks3_pcm"
         self.session.message = "StickS3 audio uploaded"
+        timing.mark("audio_saved")
+        self._start_prefetch()
+        timing.mark("prefetch_started")
         show_hud("sending")
+        timing.mark("hud_done")
         self._save()
+        timing.mark("upload_fn_done")
         return self.session
 
     def stop(self, request: dict[str, Any] | None = None) -> RecordingSession:
@@ -246,10 +255,15 @@ class RecordingController:
                     self._save_stop_result()
                     return self.session
 
-        transcript = self.transcriber.transcribe(
-            self.session.to_jsonable(),
-            explicit_text=explicit_text,
-        )
+        transcript = self._consume_prefetch(explicit_text)
+        if transcript is None:
+            timing.mark("asr_begin")
+            transcript = self.transcriber.transcribe(
+                self.session.to_jsonable(),
+                explicit_text=explicit_text,
+            )
+            timing.mark("asr_end")
+        timing.mark("asr_ready")
         self.session.transcript_source = "recording_stop_cmd" if stop_hook_source else transcript.source
         if transcript.success and transcript.text:
             self.session.transcript = transcript.text
@@ -274,6 +288,7 @@ class RecordingController:
                 return self.session
             if should_paste:
                 paste = self.paste_injector.paste(transcript.text, press_enter=press_enter)
+                timing.mark("paste_end")
                 self.session.pasted = paste.success
                 self.session.status = "pasted" if paste.success else "paste_failed"
                 self.session.message = paste.message if paste.success else f"{transcript_message}; {paste.message}"
@@ -293,6 +308,43 @@ class RecordingController:
             show_hud("failed", hold_seconds=1.8)
         self._save_stop_result()
         return self.session
+
+    def _start_prefetch(self) -> None:
+        """Start transcribing as soon as the audio has arrived, in parallel with the stop request."""
+        self._prefetch = None
+        if not _env_bool("VIBE_STICK_PREFETCH_ASR", default=True):
+            return
+        if os.environ.get("VIBE_STICK_TRANSCRIBE_CMD", "").strip() or os.environ.get("VIBE_STICK_TRANSCRIPT_TEXT", "").strip():
+            return
+        audio_file = self.session.audio_file
+        if not audio_file:
+            return
+        payload = self.session.to_jsonable()
+        holder: dict[str, Any] = {"audio_file": audio_file, "result": None, "done": threading.Event()}
+
+        def _run() -> None:
+            timing.mark("asr_begin")
+            try:
+                holder["result"] = self.transcriber.transcribe(payload, explicit_text="")
+            except Exception as exc:  # noqa: BLE001 - never let the worker die silently
+                holder["result"] = TranscriptionResult(
+                    success=False, message=f"Prefetch transcription crashed: {exc}", source="none"
+                )
+            finally:
+                timing.mark("asr_end")
+                holder["done"].set()
+
+        self._prefetch = holder
+        threading.Thread(target=_run, name="asr-prefetch", daemon=True).start()
+
+    def _consume_prefetch(self, explicit_text: str) -> TranscriptionResult | None:
+        holder = self._prefetch
+        self._prefetch = None
+        if holder is None or explicit_text or holder["audio_file"] != self.session.audio_file:
+            return None
+        if not holder["done"].wait(timeout=90):
+            return None
+        return holder["result"]
 
     def _load(self) -> RecordingSession:
         try:
@@ -319,6 +371,15 @@ class RecordingController:
 
     def _save_stop_result(self) -> None:
         self._save()
+        timing.mark("stop_done")
+        metrics = _wav_metrics(self.session.audio_file) if self.session.audio_file else None
+        print(
+            timing.summary(
+                metrics.duration_seconds if metrics else None,
+                metrics.audio_bytes if metrics else None,
+            ),
+            flush=True,
+        )
         print(
             "recording stop result "
             f"session={self.session.session_id} "
@@ -330,6 +391,27 @@ class RecordingController:
             f"message={self.session.message}",
             flush=True,
         )
+
+
+def _trim_mic_startup(pcm: bytes, sample_rate: int, channels: int) -> bytes:
+    """Drop the first ~130 ms of a StickS3 recording.
+
+    The codec's ADC produces a DC step when it powers up; with 36 dB of gain it clips and then decays
+    over ~130 ms. That span holds no usable speech, so it is cut before recognition. Configurable with
+    VIBE_STICK_TRIM_START_MS (0 disables). Very short clips are left alone.
+    """
+    try:
+        trim_ms = int(os.environ.get("VIBE_STICK_TRIM_START_MS", "130"))
+    except ValueError:
+        trim_ms = 130
+    if trim_ms <= 0 or sample_rate <= 0 or channels <= 0:
+        return pcm
+    frame_bytes = 2 * channels
+    skip = (sample_rate * trim_ms // 1000) * frame_bytes
+    keep_at_least = (sample_rate // 4) * frame_bytes  # never trim a clip down below 250 ms
+    if len(pcm) < skip + keep_at_least:
+        return pcm
+    return pcm[skip:]
 
 
 def _env_bool(name: str, default: bool) -> bool:

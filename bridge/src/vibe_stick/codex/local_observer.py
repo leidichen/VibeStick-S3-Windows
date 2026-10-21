@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from vibe_stick.codex.quota import QuotaSnapshot
-from vibe_stick.desktop.process import hidden_subprocess_kwargs
+from vibe_stick.desktop import process_snapshot
 from vibe_stick.protocol.state import AgentStatus
 from vibe_stick.providers._jsonl import session_files, tail_json_events
 
@@ -255,28 +255,8 @@ def _codex_process_running() -> bool:
 
 
 def _windows_codex_process_running() -> bool:
-    command = [
-        "powershell",
-        "-NoProfile",
-        "-Command",
-        "Get-CimInstance Win32_Process | "
-        "Where-Object { $_.Name -match '^(codex|ChatGPT)\\.exe$' -or $_.CommandLine -match 'codex' } | "
-        "ForEach-Object { \"$($_.Name)|$($_.CommandLine)\" }",
-    ]
-    try:
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=3,
-            **hidden_subprocess_kwargs(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    if result.returncode != 0:
-        return False
-    return any(_command_is_codex_process(line) for line in result.stdout.splitlines())
+    # Cached, background-refreshed snapshot shared with the Claude observer.
+    return any(_command_is_codex_process(line) for line in process_snapshot.lines())
 
 
 def _command_is_codex_process(command: str) -> bool:
@@ -297,3 +277,4 @@ def _command_is_codex_process(command: str) -> bool:
 
 def _has_app_server_arg(command: str) -> bool:
     return bool(re.search(r"(^|\s)app-server(\s|$)", command))
+

@@ -1,5 +1,7 @@
 # VibeStick 使用、刷入与排障指南
 
+> 本 fork 的按键、屏幕、电池、语音等改动见 [FORK_CHANGES.zh-CN.md](FORK_CHANGES.zh-CN.md);Windows 从零开始见 [WINDOWS_QUICKSTART.zh-CN.md](WINDOWS_QUICKSTART.zh-CN.md)。本文其余部分沿用上游(以 macOS 为例),与那两份不一致的地方以它们为准。
+
 这份文档面向第一次安装 VibeStick 的用户。项目目前支持 M5Stack StickS3，电脑端 bridge 支持 macOS 和 Windows。
 
 ## 0. 先确认三件事
@@ -241,13 +243,15 @@ Start-ScheduledTask -TaskName "VibeStick Bridge"
 
 ### 语音和发送
 
-- 长按正面蓝色按钮开始录音，屏幕显示“正在聆听”。松开蓝色按钮后，StickS3 上传录音，bridge 进行识别并粘贴到当前获得焦点的电脑程序。
-- 正面蓝色按钮短按会发送 `button_short`，相当于回车/发送。
+- 长按正面蓝色按钮(约 0.3 秒后触发),先响一声“嘀—嘟”,屏幕显示“正在聆听”。**听到提示音后稍等半拍再开口**;松开后,StickS3 上传录音,bridge 进行识别并粘贴到当前获得焦点的电脑程序。
+- 正面蓝色按钮单击会发送 `button_short`,相当于回车/发送;双击立即刷新额度。
 - 语音识别、上传、转写或粘贴失败时，StickS3 播放错误提示音。
 
 ### 电脑切换
 
-- 正常首页短按右侧键：切换 provider。
+- 正常首页**单击**右侧键:亮屏 / 息屏。
+- 正常首页**双击**右侧键:切换 provider。
+- 正常首页**连按三下**右侧键:竖屏 / 横屏。
 - 长按右侧键：搜索同一局域网内的 VibeStick bridge。
 - 搜索页面短按右侧键：选择下一个电脑。
 - 搜索页面短按蓝色按钮：确认当前电脑。搜索页中长按蓝色按钮也会确认。
@@ -256,7 +260,7 @@ Start-ScheduledTask -TaskName "VibeStick Bridge"
 
 ### 屏幕和省电
 
-当前固件采用较低屏幕背光，空闲约 5 秒后关闭背光。息屏时第一次按任意键只点亮屏幕，不执行回车、录音、切换或搜索；屏幕点亮后再次按键才执行对应功能。固件默认 CPU 频率为 80 MHz，并启用 Wi-Fi 省电模式。屏幕熄灭只关闭背光，不会停止 bridge、Wi-Fi 或任务状态轮询。
+屏幕不会自己熄灭,只有按一下右侧键才息屏;提醒到来或按任意键时会自动亮起。息屏时第一次按蓝色键只点亮屏幕,不执行回车、录音或刷新额度。固件默认 CPU 频率为 80 MHz,并启用 Wi-Fi 省电模式。息屏只关闭背光,不会停止 bridge、Wi-Fi 或任务状态轮询。电池只有 250 mAh,详见 [FORK_CHANGES.zh-CN.md](FORK_CHANGES.zh-CN.md#3-电池)。
 
 ## 8. 状态和提示音
 
@@ -275,7 +279,7 @@ Start-ScheduledTask -TaskName "VibeStick Bridge"
 
 状态点表示选中电脑上的本地 Codex/Claude agent 状态，不单独表示 bridge 进程是否存在。bridge 已连接但电脑上没有受支持的 agent 活动时，正常显示“待命”；只有 bridge 或 Wi-Fi 不可达才显示“离线”。
 
-当前稳定首页优先显示 provider 状态和电脑名称，5H/7D 用量区域暂不显示。
+首页显示 provider 状态、5H/7D 额度条,底部一行显示额度数据的新旧(`Upd 5m ago`,10 分钟变黄、1 小时变红);没有额度数据时回退显示电脑名称。
 
 ## 9. 多电脑切换原理
 

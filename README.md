@@ -10,6 +10,27 @@ VibeStick turns an M5Stack StickS3 into a tiny desktop companion for coding agen
 
 VibeStick targets M5Stack StickS3 hardware and is not an official M5Stack project. Third-party agent names such as Codex and Claude describe compatible local tools and integrations only.
 
+> **About this fork.** A Windows-focused fork of [GaryGaryyy/VibeStick](https://github.com/GaryGaryyy/VibeStick), built on
+> [280342193/VibeStick-1](https://github.com/280342193/VibeStick-1) (which added the Windows bridge). Added here: a stable
+> battery percentage, a screen that stays on until *you* switch it off, right-button gestures, a landscape layout, a "ready"
+> tone before recording, optional offline speech recognition, a "data age" line for the Claude quota, battery telemetry and
+> a set of bridge fixes. **Everything that differs from upstream, with reasons, numbers and caveats, is in
+> [docs/FORK_CHANGES.md](docs/FORK_CHANGES.md)** ([中文](docs/FORK_CHANGES.zh-CN.md)). To flash and run it on Windows start with the
+> [Windows quick start](docs/WINDOWS_QUICKSTART.md) ([中文](docs/WINDOWS_QUICKSTART.zh-CN.md)).
+
+### Controls at a glance (this fork)
+
+| Key | Gesture | Action |
+|---|---|---|
+| Blue front button | Hold (300 ms) | Cue tone, then record while held; release to transcribe and paste |
+| Blue front button | Click / double click | Enter on the computer / refresh quota |
+| Right button | **Click** | **Screen on / off** (the screen never turns off by itself) |
+| Right button | **Double click** | **Switch provider** (Codex ⇄ Claude) |
+| Right button | **Triple click** | **Portrait ⇄ landscape** |
+| Right button | Hold | Search for computers on the LAN |
+
+Details, the battery-percentage algorithm, sounds and configuration: [docs/FORK_CHANGES.md](docs/FORK_CHANGES.md).
+
 For the complete flashing, usage, Windows background installation, multi-computer switching, and troubleshooting steps, see the [Chinese usage and flashing guide](docs/USAGE.zh-CN.md).
 
 ## What you'll need (prepare first)
@@ -292,8 +313,8 @@ idf.py build
 
 - This is a cleaned prototype, not a packaged Mac app or DMG.
 - The firmware targets M5Stack StickS3 only.
-- The home screen prioritizes provider status and computer name; 5H/7D quota values are still available in bridge state but are not shown on the current stable UI.
-- The screen is dimmer than before, the backlight turns off after 5 seconds of idle time, and the firmware defaults to an 80 MHz CPU clock.
+- The home screen shows provider status, the 5H/7D quota bars and, below them, how old those numbers are (`Upd 5m ago`); see [docs/FORK_CHANGES.md](docs/FORK_CHANGES.md).
+- The backlight stays on until you press the right button once (upstream turned it off after 5 seconds); the firmware defaults to an 80 MHz CPU clock. The battery is only 250 mAh, so use USB power for a desk setup.
 - Windows support is script-based and needs Python 3.11+. The generated runner is not a signed Windows app.
 - Codex quota is inferred from local Codex session JSONL events with `rate_limits`; it is not an official quota API.
 - Claude usage comes from an undocumented Claude Code OAuth endpoint and is disabled by default.

@@ -8,6 +8,8 @@
 esp_err_t vibe_board_init_power(void);
 i2c_master_bus_handle_t vibe_board_i2c_bus(void);
 esp_err_t vibe_board_battery_level(int *level_percent);
+esp_err_t vibe_board_battery_mv(int *millivolts);  /* raw battery terminal voltage */
+esp_err_t vibe_board_vin_mv(int *millivolts);      /* raw USB / VIN rail voltage */
 esp_err_t vibe_board_battery_charging(bool *charging);
 esp_err_t vibe_board_usb_powered(bool *usb_powered);
 esp_err_t vibe_board_speaker_set_enabled(bool enabled);
