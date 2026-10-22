@@ -16,6 +16,7 @@ verified, it says so.
 - [4. Sounds](#4-sounds)
 - [5. Voice input](#5-voice-input)
 - [6. Claude usage: freshness and self-healing login](#6-claude-usage-freshness-and-self-healing-login)
+- [6b. DeepSeek balance page](#6b-deepseek-balance-page)
 - [7. Bridge fixes and performance](#7-bridge-fixes-and-performance)
 - [8. New configuration](#8-new-configuration)
 - [9. Build, flash, test](#9-build-flash-test)
