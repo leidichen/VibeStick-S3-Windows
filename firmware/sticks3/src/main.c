@@ -1074,16 +1074,16 @@ static void layout_deepseek(bool landscape)
     lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(s_quota_5h_label, LV_TEXT_ALIGN_CENTER, 0);
     if (!landscape) {
-        /* 135x240: logo over the name, amount over CNY, the amount+CNY block centred at y = 120 */
+        /* 135x240: logo over the name, amount over CNY, the amount+CNY block centred at y = 163, midway between the name and the "Upd" line */
         lv_obj_align(s_provider_icon, LV_ALIGN_TOP_MID, 0, 36);
         lv_obj_set_width(s_provider_label, 135);
         lv_obj_set_style_text_align(s_provider_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(s_provider_label, LV_ALIGN_TOP_MID, 0, 84);
         lv_obj_set_width(s_quota_5h_title_label, 120);
         lv_obj_set_style_text_align(s_quota_5h_title_label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_MID, 0, 131);
+        lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_MID, 0, 174);
         lv_obj_set_width(s_quota_5h_label, 130);
-        lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 92);
+        lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 135);
         return;
     }
     /* 240x135: name next to the logo; amount centred on the screen, CNY at the left on the same line */
