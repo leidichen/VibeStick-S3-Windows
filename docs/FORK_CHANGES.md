@@ -133,8 +133,8 @@ line falls back to the computer name.
 - **Auto power-off:** 30 minutes in a row in eco mode → the device powers off through the PMIC (single click on the
   power button turns it on). Any key press, USB power, or an alert that lights the screen restarts the countdown.
 - **Low battery:** at ≤ 10 % and again at ≤ 5 % (once each per discharge) the error tone plays **three times** and the
-  screen lights (for 30 s if you had switched it off; see §2). At ≤ 10 % on battery the battery number and icon also turn **red**
-  for 8 s; at ≤ 2 % on two consecutive samples the device powers off instead of running down to the PMIC cut-off.
+  screen lights (for 30 s if you had switched it off; see §2). At ≤ 10 % on battery the battery number and icon also turn **red**;
+  at ≤ 2 % on two consecutive samples the device powers off instead of running down to the PMIC cut-off.
   Plugging in USB rearms the warnings.
 - The thresholds are constants in `vibe_power.h`. Power-off through the PMIC (`SYS_CMD 0xA1`) follows the M5PM1
   register map from M5Stack's library; check it on your unit — the power-button behaviour in particular is documented
