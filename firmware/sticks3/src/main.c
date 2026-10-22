@@ -1072,6 +1072,7 @@ static void layout_deepseek(bool landscape)
     lv_obj_set_style_text_align(s_quota_5h_label, LV_TEXT_ALIGN_CENTER, 0);
     if (!landscape) {
         lv_obj_set_style_text_font(s_provider_label, &lv_font_montserrat_12, 0);
+        lv_obj_set_width(s_provider_label, 63);
         lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_14, 0);
         lv_obj_set_width(s_quota_5h_title_label, 108);
         lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_MID, 0, 140);
@@ -1079,11 +1080,14 @@ static void layout_deepseek(bool landscape)
         lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 162);
         return;
     }
+    /* landscape: the full name fits next to the logo; the currency sits to the left of the amount */
+    lv_obj_set_width(s_provider_label, 110);
     lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_width(s_quota_5h_title_label, 120);
-    lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_MID, 0, 44);
-    lv_obj_set_width(s_quota_5h_label, 230);
-    lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 62);
+    lv_obj_set_width(s_quota_5h_title_label, 56);
+    lv_obj_set_style_text_align(s_quota_5h_title_label, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_LEFT, 12, 74);
+    lv_obj_set_width(s_quota_5h_label, 170);
+    lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_RIGHT, -6, 62);
 }
 
 static void layout_ui(bool landscape)
@@ -1095,6 +1099,7 @@ static void layout_ui(bool landscape)
     lv_obj_clear_flag(s_quota_7d_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font(s_provider_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_width(s_provider_label, 60);
     lv_obj_set_style_text_font(s_status_label, FONT_CN, 0);
     lv_obj_set_style_text_font(s_quota_5h_label, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_font(s_quota_7d_label, &lv_font_montserrat_20, 0);
