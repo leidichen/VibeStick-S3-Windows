@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #define VIBE_BATT_MEDIAN_N 5
+#define VIBE_BATT_USB_OFFSET_MV 40 /* terminal voltage rise while USB power is present */
 #define VIBE_BATT_FLAG_WINDOW 24 /* samples; one sample per 15 s = 6 minutes */
 
 typedef struct {
@@ -37,7 +38,8 @@ typedef struct {
 
 void vibe_battery_init(vibe_battery_t *b);
 
-/* Raw conversion (kept identical to the old firmware): 3300 mV = 0 %, 4100 mV = 100 %. */
+/* Resting voltage -> percentage, piecewise-linear over a curve measured on this device (see vibe_battery.c).
+ * The old straight line 3300..4100 mV overstated low charge by 7..9 points. */
 int vibe_battery_percent_from_mv(int mv);
 
 /* Feed one reading (every ~15 s). Returns the percentage to display. */

@@ -15,16 +15,33 @@ void vibe_battery_init(vibe_battery_t *b)
     memset(b, 0, sizeof(*b));
 }
 
+/* Resting-voltage curve of this device's 250 mAh cell, measured from one constant-load discharge
+ * (battery_log.csv 2026-10-21 16:36 -> 21:17): remaining run time until 3300 mV, as a percentage. */
+static const struct {
+    int mv;
+    int pct;
+} k_curve[] = {
+    {3300, 0},  {3400, 4},  {3450, 10}, {3500, 17}, {3550, 25}, {3600, 34}, {3650, 42}, {3700, 49},
+    {3750, 56}, {3800, 65}, {3850, 73}, {3900, 83}, {3950, 92}, {4000, 97}, {4050, 100},
+};
+
 int vibe_battery_percent_from_mv(int mv)
 {
-    int level = (mv - 3300) * 100 / (4150 - 3350);
-    if (level < 0) {
+    const int n = (int)(sizeof(k_curve) / sizeof(k_curve[0]));
+    if (mv <= k_curve[0].mv) {
         return 0;
     }
-    if (level > 100) {
+    if (mv >= k_curve[n - 1].mv) {
         return 100;
     }
-    return level;
+    for (int i = 1; i < n; ++i) {
+        if (mv <= k_curve[i].mv) {
+            const int span = k_curve[i].mv - k_curve[i - 1].mv;
+            return k_curve[i - 1].pct +
+                   (mv - k_curve[i - 1].mv) * (k_curve[i].pct - k_curve[i - 1].pct) / span;
+        }
+    }
+    return 100;
 }
 
 static void push_mv(vibe_battery_t *b, int mv)
@@ -103,7 +120,8 @@ int vibe_battery_update(vibe_battery_t *b, int bat_mv, bool charging, bool usb_p
     push_mv(b, bat_mv);
     push_flag(b, charging);
     const int med = median_mv(b);
-    const int raw = vibe_battery_percent_from_mv(med);
+    /* with USB attached the terminal voltage sits about 40 mV above the resting voltage */
+    const int raw = vibe_battery_percent_from_mv(usb_powered ? med - VIBE_BATT_USB_OFFSET_MV : med);
 
     if (!usb_powered) {
         b->full_latched = false;

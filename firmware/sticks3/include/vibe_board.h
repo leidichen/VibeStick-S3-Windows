@@ -6,6 +6,7 @@
 #include "esp_err.h"
 
 esp_err_t vibe_board_init_power(void);
+esp_err_t vibe_board_power_off(void);             /* PMIC shutdown; the power button turns the device on again */
 i2c_master_bus_handle_t vibe_board_i2c_bus(void);
 esp_err_t vibe_board_battery_level(int *level_percent);
 esp_err_t vibe_board_battery_mv(int *millivolts);  /* raw battery terminal voltage */

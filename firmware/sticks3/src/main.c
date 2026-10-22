@@ -8,6 +8,7 @@
 #include "vibe_battery.h"
 #include "vibe_board.h"
 #include "vibe_input.h"
+#include "vibe_power.h"
 #include "vibe_stick_config.h"
 #include "button_gpio.h"
 #include "cJSON.h"
@@ -168,6 +169,11 @@ static int s_orientation; /* 0 portrait, 1 landscape (blue button on the right) 
 static lv_obj_t *s_quota_wrap;
 static lv_obj_t *s_quota_divider;
 static int64_t s_last_user_activity_ms;
+static vibe_power_t s_power;
+static bool s_power_eco;
+static bool s_warn_wake_active;
+static int64_t s_warn_wake_until_ms;
+static int64_t s_warn_wake_mark_ms;
 static char s_bridge_host[BRIDGE_HOST_LEN] = VIBE_STICK_BRIDGE_HOST;
 static int s_bridge_port = VIBE_STICK_BRIDGE_PORT;
 static bridge_candidate_t s_bridge_candidates[BRIDGE_CANDIDATE_COUNT];
@@ -1905,13 +1911,63 @@ static void upload_battery_samples(void)
     }
 }
 
+static void apply_power_action(vibe_power_action_t action)
+{
+    switch (action) {
+    case VIBE_POWER_NONE:
+        break;
+    case VIBE_POWER_WARN_LOW:
+        ESP_LOGW(TAG, "battery low warning shown=%d%%", s_state.battery);
+        if (!s_display_awake) {
+            /* light the screen for a few seconds without counting it as user activity */
+            s_warn_wake_mark_ms = s_last_user_activity_ms;
+            s_warn_wake_until_ms = now_ms() + 8000;
+            s_warn_wake_active = true;
+            set_display_awake(true);
+        }
+        (void)vibe_audio_play_sound(VIBE_STICK_SOUND_ERROR);
+        break;
+    case VIBE_POWER_OFF_IDLE:
+    case VIBE_POWER_OFF_LOW:
+        ESP_LOGW(TAG, "auto power off reason=%s battery=%d%%",
+                 action == VIBE_POWER_OFF_LOW ? "battery-low" : "idle-on-battery", s_state.battery);
+        set_display_awake(false);
+        vTaskDelay(pdMS_TO_TICKS(200));
+        if (vibe_board_power_off() != ESP_OK) {
+            ESP_LOGE(TAG, "power off failed; staying on");
+            vibe_power_init(&s_power);
+        }
+        break;
+    }
+}
+
+static void update_power_mode(void)
+{
+    const int64_t t = now_ms();
+    if (s_warn_wake_active && t >= s_warn_wake_until_ms) {
+        s_warn_wake_active = false;
+        if (s_last_user_activity_ms == s_warn_wake_mark_ms) {
+            set_display_awake(false);
+        }
+    }
+    const bool eco = vibe_power_is_eco(s_state.usb_powered, s_display_awake, vibe_audio_is_recording());
+    if (eco != s_power_eco) {
+        s_power_eco = eco;
+        if (s_wifi_connected) {
+            ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_ps(eco ? WIFI_PS_MAX_MODEM : WIFI_PS_MIN_MODEM));
+        }
+        ESP_LOGI(TAG, "power mode %s", eco ? "eco (battery, screen off)" : "normal");
+    }
+    apply_power_action(vibe_power_tick(&s_power, t, eco));
+}
+
 static void poll_state(void)
 {
     char response[1536] = {0};
     const int64_t current_ms = now_ms();
     static int64_t last_battery_poll_ms = -1;
     bool power_read_ok = false;
-    if (last_battery_poll_ms < 0 || current_ms - last_battery_poll_ms >= VIBE_STICK_BATTERY_POLL_MS) {
+    if (last_battery_poll_ms < 0 || current_ms - last_battery_poll_ms >= vibe_power_battery_poll_ms(s_power_eco)) {
         bool charging = false;
         bool usb_powered = false;
         const bool charging_ok = vibe_board_battery_charging(&charging) == ESP_OK;
@@ -1930,6 +1986,7 @@ static void poll_state(void)
             static vibe_battery_t battery_filter;
             static bool last_full = false;
             s_state.battery = vibe_battery_update(&battery_filter, battery_mv, charging, usb_powered);
+            apply_power_action(vibe_power_on_battery_sample(&s_power, s_state.battery, usb_powered));
             const bool full = vibe_battery_is_full(&battery_filter);
             if (full != last_full) {
                 ESP_LOGI(TAG, "battery full latch=%d mv=%d shown=%d", full, battery_mv, s_state.battery);
@@ -2390,7 +2447,8 @@ static void app_task(void *arg)
     int64_t last_poll = 0;
     while (true) {
         int64_t now_ms = esp_timer_get_time() / 1000;
-        if (now_ms - last_poll >= VIBE_STICK_STATE_POLL_MS) {
+        update_power_mode();
+        if (now_ms - last_poll >= vibe_power_state_poll_ms(s_power_eco)) {
             last_poll = now_ms;
             poll_state();
         }
@@ -2452,6 +2510,7 @@ void app_main(void)
     s_lvgl_lock = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(init_display());
     s_last_user_activity_ms = now_ms();
+    vibe_power_init(&s_power);
     lvgl_lock();
     create_ui();
     lvgl_unlock();

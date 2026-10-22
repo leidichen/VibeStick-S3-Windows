@@ -73,7 +73,15 @@ static void scenarios(void)
         after = vibe_battery_update(&b, 4070, false, false);
     }
     CHECK(!vibe_battery_is_full(&b), "latch survived unplugging");
-    CHECK(after >= 90 && after <= 97, "after unplug shows %d (expected ~96 for 4070 mV)", after);
+    CHECK(after >= 97, "after unplug shows %d (expected ~100 for 4070 mV)", after);
+
+    /* 3b the display follows the measured curve, and USB power is compensated */
+    CHECK(vibe_battery_percent_from_mv(3500) == 17, "curve 3500 mV -> %d", vibe_battery_percent_from_mv(3500));
+    CHECK(vibe_battery_percent_from_mv(3300) == 0 && vibe_battery_percent_from_mv(3000) == 0, "curve low end");
+    CHECK(vibe_battery_percent_from_mv(4100) == 100, "curve high end");
+    vibe_battery_init(&b);
+    CHECK(vibe_battery_update(&b, 3572, true, true) < 25, "3572 mV while charging must read below 25 %% (got %d)",
+          vibe_battery_percent_from_mv(3572 - VIBE_BATT_USB_OFFSET_MV));
 
     /* 4 a steady climb while the charge flag stays on must NOT show 100 % early */
     vibe_battery_init(&b);

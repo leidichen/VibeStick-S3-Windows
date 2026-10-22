@@ -13,6 +13,7 @@
 #define M5PM1_REG_PWR_CFG 0x06
 #define M5PM1_REG_HOLD_CFG 0x07
 #define M5PM1_REG_I2C_CFG 0x09
+#define M5PM1_REG_SYS_CMD 0x0C
 #define M5PM1_REG_GPIO_MODE 0x10
 #define M5PM1_REG_GPIO_OUT 0x11
 #define M5PM1_REG_GPIO_IN 0x12
@@ -26,11 +27,16 @@
 #define M5PM1_REG_IRQ_MASK1 0x43
 #define M5PM1_REG_IRQ_MASK2 0x44
 #define M5PM1_REG_IRQ_MASK3 0x45
+#define M5PM1_REG_BTN_CFG_1 0x49
+#define M5PM1_REG_BTN_CFG_2 0x4A
 #define M5PM1_REG_AW8737A_PULSE 0x53
 
 #define M5PM1_PWR_CFG_LDO_EN BIT(2)
 #define M5PM1_PWR_CFG_LED_CTRL BIT(4)
 #define M5PM1_HOLD_CFG_LDO_HOLD BIT(5)
+#define M5PM1_SYS_CMD_SHUTDOWN 0xA1
+#define M5PM1_BTN_CFG_1_SINGLE_RST_DIS BIT(0)
+#define M5PM1_BTN_CFG_2_DOUBLE_OFF_DIS BIT(0)
 #define M5PM1_GPIO2_L3B_POWER_EN BIT(2)
 #define M5PM1_GPIO3_SPK_PULSE BIT(3)
 #define M5PM1_GPIO_FUNC_MASK(pin) (0x03 << ((pin) * 2))
@@ -161,8 +167,23 @@ esp_err_t vibe_board_init_power(void)
                                              M5PM1_GPIO_FUNC_MASK(1),
                                              M5PM1_GPIO_FUNC_IRQ(1)));
 
+    /* Power button, handled by the PMIC itself: by default a single click resets the chip and a double click
+     * powers off. Keep the double click, but stop an accidental single click from rebooting the device. */
+    ESP_ERROR_CHECK_WITHOUT_ABORT(update_reg(M5PM1_REG_BTN_CFG_1, 0, M5PM1_BTN_CFG_1_SINGLE_RST_DIS));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(update_reg(M5PM1_REG_BTN_CFG_2, M5PM1_BTN_CFG_2_DOUBLE_OFF_DIS, 0));
+
     ESP_LOGI(TAG, "power hold enabled");
     return ESP_OK;
+}
+
+esp_err_t vibe_board_power_off(void)
+{
+    ESP_RETURN_ON_FALSE(s_pmic_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "pmic missing");
+    /* init_power() pinned the LDO on; release it, otherwise the shutdown command may leave the rail powered */
+    ESP_ERROR_CHECK_WITHOUT_ABORT(update_reg(M5PM1_REG_HOLD_CFG, M5PM1_HOLD_CFG_LDO_HOLD, 0));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(update_reg(M5PM1_REG_PWR_CFG, M5PM1_PWR_CFG_LDO_EN, 0));
+    ESP_LOGW(TAG, "powering off");
+    return write_reg(M5PM1_REG_SYS_CMD, M5PM1_SYS_CMD_SHUTDOWN);
 }
 
 i2c_master_bus_handle_t vibe_board_i2c_bus(void)

@@ -38,7 +38,8 @@ left side (portrait, screen facing you).
 | Right button | **Double click** | **Switch provider** (Codex ⇄ Claude) |
 | Right button | **Triple click** | **Portrait ⇄ landscape** (remembered across reboots) |
 | Right button | Hold (450 ms) | Search for bridges on the LAN (computer picker) |
-| Left power button | Single click | Behaves like a restart on our unit (handled by the power-management chip, not by this firmware) |
+| Left power button | Single click | Does nothing (the power-management chip would otherwise **restart** the device; the firmware now disables that) |
+| Left power button | **Double click** | **Power off** (handled by the chip; it is its default behaviour, we only keep it enabled). Turn on again with one click |
 | Left power button | Hold | Enter download mode for flashing (until the blue LED double-blinks); see the flashing guide |
 
 Notes
@@ -99,16 +100,35 @@ line falls back to the computer name.
 
 - The StickS3 has a **250 mAh** battery, roughly 5 % of a phone battery.
 - Espressif/M5 figures (4.2 V): power off 14 µA, ESP32 asleep ≈ 102 µA, active (Wi-Fi on) ≈ 37 mA, full load ≈ 519 mA.
-- This firmware keeps Wi-Fi connected so it can answer a key press immediately and show alerts. On our unit a full
-  battery with the screen **off** and Wi-Fi connected lasted about **15 hours** (about 17 mA average — an
-  estimate, because the log has a gap when the PC went to sleep). That matches the capacity; we found no sign of a
-  faulty battery.
+- This firmware keeps Wi-Fi connected so it can answer a key press immediately and show alerts. Measured on our
+  unit (full battery unplugged, screen **off**, state polled every 5 s): it ran **about 6.5 hours** before it shut
+  down at 2.96 V, i.e. roughly 40 mA average. The screen is not the main cost — with the screen on part of the time
+  the voltage fell at the same ≈ 145 mV/h. (An earlier version of this document said ≈ 15 h; that was an estimate
+  from a log with a gap and was wrong.) We found no sign of a faulty battery.
+- Since then the firmware has an **eco mode and a battery policy**, see below. We have not yet measured how much
+  they help; the log will tell.
 - Practical advice: **keep it plugged in** when using it as a desk device. It is not a pocket device with this firmware.
 - The official *Hat 18650C* battery base is listed by some shops as compatible, but M5Stack's own StickS3 page says it
   is structurally **incompatible**. A power bank on the USB-C port is the realistic way to extend runtime.
 - A charger that holds the USB input at ≈ 5.1–5.2 V charged the battery normally. A PC USB port that sagged to
   ≈ 4.65 V showed the charging flag almost always at 0. We only have a few minutes of comparison data for that, so
   treat it as a hint, not a result.
+
+### Power saving and low-battery behaviour
+
+`firmware/sticks3/src/vibe_power.c` (pure C, unit-tested on a PC):
+
+- **Eco mode** = no USB power, screen off, not recording. The device then asks the bridge for its state every
+  **20 s** instead of 5 s, samples the battery every **60 s** instead of 15 s, and switches Wi-Fi to the deeper
+  `WIFI_PS_MAX_MODEM`. Cost: a "done" sound can arrive up to ~20 s late while in eco mode.
+- **Auto power-off:** 30 minutes in a row in eco mode → the device powers off through the PMIC (single click on the
+  power button turns it on). Any key press, USB power, or an alert that lights the screen restarts the countdown.
+- **Low battery:** at ≤ 10 % and again at ≤ 5 % (once each per discharge) the error tone plays and the screen lights
+  for 8 s; at ≤ 2 % on two consecutive samples the device powers off instead of running down to the PMIC cut-off.
+  Plugging in USB rearms the warnings.
+- The thresholds are constants in `vibe_power.h`. Power-off through the PMIC (`SYS_CMD 0xA1`) follows the M5PM1
+  register map from M5Stack's library; check it on your unit — the power-button behaviour in particular is documented
+  only indirectly.
 
 ### Why the percentage was wrong, and what it does now
 
@@ -131,6 +151,15 @@ There is no fuel gauge; the percentage is estimated from the battery voltage. Up
    it rises by ≥ 10 points (e.g. after a long rest).
 4. After plugging / unplugging the display is held for 2 samples, because the voltage steps by tens of mV.
 5. The latch needs about 3 minutes of history after a reboot.
+6. **Measured voltage → percentage curve** instead of a straight line. From one constant-load discharge of our unit
+   (remaining run time until 3300 mV) the straight line showed e.g. 25 % at 3500 mV when only ≈ 17 % was left,
+   and 12 % at 3400 mV when ≈ 3 % was left; near the top it was too low. The table in `vibe_battery.c` replaces it.
+7. **USB offset:** with USB power the terminal voltage is ≈ 40 mV above the resting voltage (seen on every
+   plug/unplug in the log), so 40 mV is subtracted before the lookup. Without it, a flat battery that had just been
+   plugged in showed 33 % after half an hour when it was nearer 20 %.
+
+The curve comes from **one** discharge at one load on **one** unit, and the 40 mV offset is a single-point estimate
+(the real offset depends on the charge current). Treat both as a first approximation and keep the log running.
 
 Replaying our own 1058-sample charge log through the same C code: display changes 787 → 25, plateau changes
 577 → 2, and the latch engages at 4052 mV (the plateau really started at 11:53, the latch at 11:56). You can repeat
