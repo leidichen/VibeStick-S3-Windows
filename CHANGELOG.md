@@ -3,6 +3,8 @@
 ## Unreleased (fork)
 
 Firmware (StickS3)
+- Alerts that light a screen the user had switched off now switch it off again after 30 s (untouched); a screen left on stays on. Dimmer backlight on battery (28 vs 45). Low battery: red number/icon at <= 10 %, three tones.
+- App partition enlarged from 1.5 MB to 3 MB (`partitions.csv`); the first flash rewrites the partition table.
 - DeepSeek balance page (logo, CNY and the remaining amount only; red below 10 CNY), reached by the right button's double click after Claude. The bridge fetches it every 5 minutes with `VIBE_STICK_DEEPSEEK_API_KEY`.
 - Eco mode on battery with the screen off (poll 20 s, battery sample 60 s, deeper Wi-Fi sleep); auto power-off after 30 min of it; low-battery warnings at 10 %/5 % and power-off at 2 %. Power button: single click no longer restarts, double click powers off.
 - Battery percentage uses a curve measured on the device plus a 40 mV allowance while on USB (the straight line overstated low charge). Firmware 0.1.9.

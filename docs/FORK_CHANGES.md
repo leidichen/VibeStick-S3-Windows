@@ -57,6 +57,14 @@ Notes
 useless as a desk display. Now the screen stays on until you press the right button once. It lights up again on
 its own when an alert arrives (task finished / error / waiting for approval), and when you press any key.
 
+**Alerts and the screen you switched off.** If the screen was **on**, an alert leaves it on (monitor use). If you had
+switched it **off** with the right button, an alert lights it for **30 s** and then switches it off again — unless you
+touch a key in the meantime, which makes it stay on. A second alert during those 30 s only restarts the 30 s.
+
+**Brightness:** with USB power the backlight is 45/255 as before; on battery it is dimmer (28/255, constants
+`LCD_BACKLIGHT_DEFAULT` / `LCD_BACKLIGHT_BATTERY` in `main.c`). It follows the cable while the screen is on. We have not
+measured how much this saves.
+
 Trade-off: a lit screen costs battery. With a 250 mAh battery you should either keep it on USB power or switch the
 screen off when you carry it (see [Battery](#3-battery)).
 
@@ -124,7 +132,8 @@ line falls back to the computer name.
   `WIFI_PS_MAX_MODEM`. Cost: a "done" sound can arrive up to ~20 s late while in eco mode.
 - **Auto power-off:** 30 minutes in a row in eco mode → the device powers off through the PMIC (single click on the
   power button turns it on). Any key press, USB power, or an alert that lights the screen restarts the countdown.
-- **Low battery:** at ≤ 10 % and again at ≤ 5 % (once each per discharge) the error tone plays and the screen lights
+- **Low battery:** at ≤ 10 % and again at ≤ 5 % (once each per discharge) the error tone plays **three times** and the
+  screen lights (for 30 s if you had switched it off; see §2). At ≤ 10 % on battery the battery number and icon also turn **red**
   for 8 s; at ≤ 2 % on two consecutive samples the device powers off instead of running down to the PMIC cut-off.
   Plugging in USB rearms the warnings.
 - The thresholds are constants in `vibe_power.h`. Power-off through the PMIC (`SYS_CMD 0xA1`) follows the M5PM1
@@ -356,6 +365,9 @@ the first definition of a variable wins. A stale copy in the app-data folder wil
 - Wi-Fi name / password, bridge address and token are **compiled into the firmware** (`vibe_stick_secrets.h`), so a
   pre-built binary cannot be shared — everyone builds their own. Changing any of them means re-flashing.
 - Flashing needs a USB-C **data** cable. There is no over-the-air update (single-app partition table).
+- **Flash layout:** `firmware/sticks3/partitions.csv` gives the app a 3 MB partition (the chip has 8 MB; ESP-IDF's
+  "single app large" preset only gives 1.5 MB and the firmware had reached 95 % of it). NVS stays at the same address,
+  so the saved computer and orientation survive. The first flash after this change rewrites the partition table.
 - Tests: `PYTHONPATH=bridge/src python -m unittest discover -s tests` (what CI runs). Two tests compile C code and
   are skipped when no `cc`/`gcc`/`clang` is on `PATH`.
 

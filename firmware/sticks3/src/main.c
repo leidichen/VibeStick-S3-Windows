@@ -47,7 +47,9 @@
 #define LCD_PIXEL_CLOCK_HZ (20 * 1000 * 1000)
 #define LCD_BACKLIGHT_PWM_HZ 5000
 #define LCD_BACKLIGHT_PWM_MAX 255
-#define LCD_BACKLIGHT_DEFAULT 45
+#define LCD_BACKLIGHT_DEFAULT 45  /* with USB power */
+#define LCD_BACKLIGHT_BATTERY 28  /* on battery: dimmer, saves power */
+#define ALERT_WAKE_MS 30000       /* an alert that lights a screen the user had switched off keeps it on this long */
 #define LVGL_DRAW_BUF_LINES 24
 #define LVGL_TICK_PERIOD_MS 10
 #define BATTERY_FILL_MAX_WIDTH 20
@@ -185,9 +187,6 @@ static lv_obj_t *s_quota_divider;
 static int64_t s_last_user_activity_ms;
 static vibe_power_t s_power;
 static bool s_power_eco;
-static bool s_warn_wake_active;
-static int64_t s_warn_wake_until_ms;
-static int64_t s_warn_wake_mark_ms;
 static char s_bridge_host[BRIDGE_HOST_LEN] = VIBE_STICK_BRIDGE_HOST;
 static int s_bridge_port = VIBE_STICK_BRIDGE_PORT;
 static bridge_candidate_t s_bridge_candidates[BRIDGE_CANDIDATE_COUNT];
@@ -518,8 +517,11 @@ static void lvgl_flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t 
     esp_lcd_panel_draw_bitmap(panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
 }
 
+static uint8_t s_backlight_now;
+
 static void set_backlight(uint8_t brightness)
 {
+    s_backlight_now = brightness;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, brightness);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
@@ -529,19 +531,44 @@ static int64_t now_ms(void)
     return esp_timer_get_time() / 1000;
 }
 
+static uint8_t backlight_level(void)
+{
+    return s_state.usb_powered ? LCD_BACKLIGHT_DEFAULT : LCD_BACKLIGHT_BATTERY;
+}
+
 static void set_display_awake(bool awake)
 {
     if (s_display_awake == awake) {
         return;
     }
     s_display_awake = awake;
-    set_backlight(awake ? LCD_BACKLIGHT_DEFAULT : 0);
+    set_backlight(awake ? backlight_level() : 0);
     ESP_LOGI(TAG, "backlight %s", awake ? "awake" : "sleep");
 }
 
 static void note_user_activity(void)
 {
     s_last_user_activity_ms = now_ms();
+    set_display_awake(true);
+}
+
+static int64_t s_alert_wake_until_ms;
+static int64_t s_alert_wake_mark_ms;
+static bool s_alert_wake_active;
+
+/* An alert (task done, low battery) wants the screen. If it was on, leave it as it is (monitor use). If the user had
+ * switched it off, light it for ALERT_WAKE_MS and switch it off again, unless the user touches a key meanwhile. */
+static void wake_for_alert(void)
+{
+    if (s_display_awake && !s_alert_wake_active) {
+        note_user_activity();
+        return;
+    }
+    if (!s_alert_wake_active) {
+        s_alert_wake_mark_ms = s_last_user_activity_ms;
+    }
+    s_alert_wake_until_ms = now_ms() + ALERT_WAKE_MS;
+    s_alert_wake_active = true;
     set_display_awake(true);
 }
 
@@ -747,8 +774,12 @@ static void set_battery_ui(int battery_value, bool charging, bool usb_powered)
     const lv_color_t normal_color = lv_color_hex(0xf3f4f6);
     const lv_color_t charging_color = lv_color_hex(0x32d583);
 
-    lv_obj_set_style_border_color(s_battery_icon, normal_color, 0);
-    lv_obj_set_style_bg_color(s_battery_fill, external_power ? charging_color : normal_color, 0);
+    const bool low = !external_power && battery_value > 0 && battery_value <= VIBE_POWER_WARN1_PERCENT;
+    const lv_color_t low_color = lv_color_hex(0xf97066);
+
+    lv_obj_set_style_border_color(s_battery_icon, low ? low_color : normal_color, 0);
+    lv_obj_set_style_text_color(s_battery_label, low ? low_color : normal_color, 0);
+    lv_obj_set_style_bg_color(s_battery_fill, external_power ? charging_color : (low ? low_color : normal_color), 0);
     lv_obj_set_style_bg_color(s_battery_cap, normal_color, 0);
     lv_obj_set_width(s_battery_fill, fill_width);
 
@@ -1603,7 +1634,7 @@ static void maybe_handle_alert(void)
         return;
     }
 
-    note_user_activity();
+    wake_for_alert();
     esp_err_t err = vibe_audio_play_sound(sound);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "alert sound skipped type=%s err=%s",
@@ -2075,14 +2106,11 @@ static void apply_power_action(vibe_power_action_t action)
         break;
     case VIBE_POWER_WARN_LOW:
         ESP_LOGW(TAG, "battery low warning shown=%d%%", s_state.battery);
-        if (!s_display_awake) {
-            /* light the screen for a few seconds without counting it as user activity */
-            s_warn_wake_mark_ms = s_last_user_activity_ms;
-            s_warn_wake_until_ms = now_ms() + 8000;
-            s_warn_wake_active = true;
-            set_display_awake(true);
+        wake_for_alert();
+        for (int i = 0; i < 3; ++i) { /* three tones: one is easy to miss */
+            (void)vibe_audio_play_sound(VIBE_STICK_SOUND_ERROR);
+            vTaskDelay(pdMS_TO_TICKS(250));
         }
-        (void)vibe_audio_play_sound(VIBE_STICK_SOUND_ERROR);
         break;
     case VIBE_POWER_OFF_IDLE:
     case VIBE_POWER_OFF_LOW:
@@ -2101,11 +2129,14 @@ static void apply_power_action(vibe_power_action_t action)
 static void update_power_mode(void)
 {
     const int64_t t = now_ms();
-    if (s_warn_wake_active && t >= s_warn_wake_until_ms) {
-        s_warn_wake_active = false;
-        if (s_last_user_activity_ms == s_warn_wake_mark_ms) {
-            set_display_awake(false);
+    if (s_alert_wake_active && t >= s_alert_wake_until_ms) {
+        s_alert_wake_active = false;
+        if (s_last_user_activity_ms == s_alert_wake_mark_ms) {
+            set_display_awake(false); /* nobody touched the device: back to the state the user left it in */
         }
+    }
+    if (s_display_awake && s_backlight_now != backlight_level()) {
+        set_backlight(backlight_level()); /* USB plugged in / unplugged while the screen is on */
     }
     const bool eco = vibe_power_is_eco(s_state.usb_powered, s_display_awake, vibe_audio_is_recording());
     if (eco != s_power_eco) {
@@ -2470,6 +2501,7 @@ static void side_button_single_click_cb(void *button_handle, void *usr_data)
     if (s_recording_overlay_visible || vibe_audio_is_recording()) {
         return; /* never blank the screen while recording */
     }
+    s_alert_wake_active = false;
     set_display_awake(false); /* manual screen off */
 }
 
