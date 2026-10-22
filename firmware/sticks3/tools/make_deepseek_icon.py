@@ -1,42 +1,50 @@
-"""Draw the simple placeholder DeepSeek icon (a whale silhouette in brand blue) and emit LVGL ARGB8888 C data.
+"""Turn the DeepSeek logo into the two LVGL ARGB8888 icons used by the device (40 px and 32 px, whale centred).
 
-Not the official logo artwork: swap assets/providers/deepseek/icon-*.png for the real files if you have the right
-to use them, then run this script again.
-    python tools/make_deepseek_icon.py
+Input : assets/providers/deepseek/logo-whale.png  (the whale from logo-source.svg on a transparent background,
+        rendered at high resolution; logo-whale.svg is the cropped vector)
+Output: generated/vibe_stick_deepseek_icon.c
+
+The logo is DeepSeek's trademark artwork supplied by the repository owner; check you may redistribute it before
+publishing your own copy. Run:  python tools/make_deepseek_icon.py
 """
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
-BLUE = (77, 107, 254, 255)
-SS = 8
+BLUE = (77, 107, 254)  # #4D6BFE
 
 
-def draw(size: int) -> Image.Image:
-    s = size * SS
-    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    u = s / 40.0
+def interior_mask(alpha: Image.Image) -> Image.Image:
+    """255 where the logo has an enclosed hole (belly, eye): in the original artwork these show the white tile."""
+    pad = 4  # a frame of background, so the flood reaches every outside corner
+    solid = Image.new("L", (alpha.width + 2 * pad, alpha.height + 2 * pad), 0)
+    solid.paste(alpha.point(lambda v: 255 if v > 127 else 0), (pad, pad))
+    ImageDraw.floodfill(solid, (0, 0), 128)  # paints the background reachable from outside
+    holes = solid.point(lambda v: 255 if v == 0 else 0)
+    return holes.crop((pad, pad, pad + alpha.width, pad + alpha.height))
 
-    def p(x, y):
-        return (x * u, y * u)
 
-    d.ellipse([*p(4, 14), *p(31, 34)], fill=BLUE)                                   # body
-    d.polygon([p(28, 22), p(36, 12), p(38, 16), p(34, 22), p(38, 28), p(36, 32)], fill=BLUE)  # tail
-    d.polygon([p(14, 16), p(10, 6), p(20, 14)], fill=BLUE)                          # back fin
-    d.ellipse([*p(9, 21), *p(13, 25)], fill=(255, 255, 255, 255))                  # eye
-    d.arc([*p(6, 24), *p(20, 32)], 20, 120, fill=(255, 255, 255, 255), width=int(1.2 * u))  # smile
-    return img.resize((size, size), Image.LANCZOS)
+def icon(src: Image.Image, size: int) -> Image.Image:
+    box = src.getchannel("A").getbbox()
+    whale = src.crop(box)
+    holes = interior_mask(whale.getchannel("A"))
+    scale = (size - 2) / max(whale.size)  # 1 px margin
+    w, h = max(1, round(whale.width * scale)), max(1, round(whale.height * scale))
+    alpha = whale.getchannel("A").resize((w, h), Image.LANCZOS)  # resample only alpha: the colour is a constant
+    white = holes.resize((w, h), Image.LANCZOS)
+    pos = ((size - w) // 2, (size - h) // 2)
+    out = Image.new("RGBA", (size, size), BLUE + (0,))
+    out.paste(Image.new("RGBA", (w, h), (255, 255, 255, 255)), pos, white)   # white belly and eye first
+    out.paste(Image.new("RGBA", (w, h), BLUE + (255,)), pos, alpha)         # blue body over it
+    return out
 
 
 def c_array(name: str, img: Image.Image) -> str:
     data = bytearray()
     for r, g, b, a in img.getdata():
         data += bytes((b, g, r, a))  # LV_COLOR_FORMAT_ARGB8888 is stored B, G, R, A
-    rows = []
-    for i in range(0, len(data), 16):
-        rows.append("    " + ", ".join(f"0x{v:02x}" for v in data[i:i + 16]) + ",")
+    rows = ["    " + ", ".join(f"0x{v:02x}" for v in data[i:i + 16]) + "," for i in range(0, len(data), 16)]
     size = img.width
     return (
         f"static const uint8_t {name}_data[] = {{\n" + "\n".join(rows) + "\n};\n\n"
@@ -49,18 +57,15 @@ def c_array(name: str, img: Image.Image) -> str:
 
 
 def main() -> None:
-    out_dir = ROOT / "assets" / "providers" / "deepseek"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    src = Image.open(ROOT / "assets" / "providers" / "deepseek" / "logo-whale.png").convert("RGBA")
     parts = ['#include "vibe_stick_ui_assets.h"\n']
-    for size in (40, 32):
-        png = out_dir / f"icon-{size}.png"
-        img = Image.open(png).convert("RGBA") if png.exists() else draw(size)
-        if not png.exists():
-            img.save(png)
-        if img.size != (size, size):
-            img = img.resize((size, size), Image.LANCZOS)
+    preview = Image.new("RGBA", (100, 50), (14, 16, 20, 255))
+    for i, size in enumerate((40, 32)):
+        img = icon(src, size)
         parts.append(c_array(f"vibe_stick_provider_deepseek_icon_{size}", img))
+        preview.paste(img, (5 + i * 50, 5), img)
     (ROOT / "generated" / "vibe_stick_deepseek_icon.c").write_text("\n".join(parts), encoding="utf-8", newline="\n")
+    preview.resize((400, 200), Image.NEAREST).save(ROOT / "assets" / "providers" / "deepseek" / "preview.png")
 
 
 if __name__ == "__main__":

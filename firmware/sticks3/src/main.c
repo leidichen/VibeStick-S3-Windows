@@ -1061,40 +1061,29 @@ static void layout_ui_base(bool landscape)
 
 static void layout_deepseek(bool landscape)
 {
-    /* The balance page reuses the quota widgets: title+value = total, second value = "Top-up / Gift" line. */
+    /* Balance page: only "CNY" (small, grey) above the amount (big). The quota widgets are reused. */
     lv_obj_add_flag(s_quota_5h_bar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_quota_7d_bar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_quota_7d_title_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_quota_7d_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_quota_divider, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_font(s_quota_5h_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_font(s_quota_7d_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_line_space(s_quota_7d_label, 4, 0);
+    lv_obj_add_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_align(s_quota_5h_title_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_align(s_quota_5h_label, LV_TEXT_ALIGN_CENTER, 0);
     if (!landscape) {
         lv_obj_set_style_text_font(s_provider_label, &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_14, 0);
         lv_obj_set_width(s_quota_5h_title_label, 108);
-        lv_obj_set_style_text_align(s_quota_5h_title_label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_MID, 0, 134);
-        lv_obj_set_width(s_quota_5h_label, 108);
-        lv_obj_set_style_text_align(s_quota_5h_label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 154);
-        lv_label_set_long_mode(s_quota_7d_label, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(s_quota_7d_label, 108);
-        lv_obj_set_style_text_align(s_quota_7d_label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(s_quota_7d_label, LV_ALIGN_TOP_MID, 0, 186);
+        lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_MID, 0, 140);
+        lv_obj_set_width(s_quota_5h_label, 120);
+        lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 162);
         return;
     }
     lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_width(s_quota_5h_title_label, 60);
-    lv_obj_set_style_text_align(s_quota_5h_title_label, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_LEFT, 10, 52);
-    lv_obj_set_width(s_quota_5h_label, 150);
-    lv_obj_set_style_text_align(s_quota_5h_label, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_RIGHT, -8, 47);
-    lv_obj_set_width(s_quota_7d_label, 224);
-    lv_obj_set_style_text_align(s_quota_7d_label, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(s_quota_7d_label, LV_ALIGN_TOP_LEFT, 10, 84);
+    lv_obj_set_width(s_quota_5h_title_label, 120);
+    lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_MID, 0, 44);
+    lv_obj_set_width(s_quota_5h_label, 230);
+    lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 62);
 }
 
 static void layout_ui(bool landscape)
@@ -1103,6 +1092,8 @@ static void layout_ui(bool landscape)
     lv_obj_clear_flag(s_quota_5h_bar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_quota_7d_bar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_quota_7d_title_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_quota_7d_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font(s_provider_label, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_font(s_status_label, FONT_CN, 0);
     lv_obj_set_style_text_font(s_quota_5h_label, &lv_font_montserrat_20, 0);
@@ -1247,47 +1238,33 @@ static void render_deepseek_body(void)
     const bool has_data = s_deepseek.total[0] != '\0';
     const double total = has_data ? strtod(s_deepseek.total, NULL) : 0.0;
     const bool low = has_data && strcmp(s_deepseek.currency, "CNY") == 0 && total < DEEPSEEK_LOW_BALANCE_CNY;
-    const bool red = low || (s_deepseek.ok && !s_deepseek.available) || (!s_deepseek.ok && s_deepseek.configured && !has_data);
+    const bool red = low || (has_data && !s_deepseek.available) || (!has_data && s_deepseek.configured);
 
-    const char *status = "OK";
+    /* the status dot is the only status indicator: green ok, red low/empty/error, amber no key */
     lv_color_t dot = lv_color_hex(0x32d583);
     if (!s_deepseek.configured) {
-        status = "NO KEY";
         dot = lv_color_hex(0xfdb022);
-    } else if (!has_data) {
-        status = "ERR";
-        dot = lv_color_hex(0xf97066);
-    } else if (!s_deepseek.available) {
-        status = "EMPTY";
-        dot = lv_color_hex(0xf97066);
-    } else if (low) {
-        status = "LOW";
+    } else if (red) {
         dot = lv_color_hex(0xf97066);
     }
-    lv_label_set_text(s_status_label, status);
     lv_obj_set_style_bg_color(s_status_dot, dot, 0);
 
-    char title[24];
-    if (landscape) {
-        snprintf(title, sizeof(title), "Total");
-    } else {
-        snprintf(title, sizeof(title), "Balance %s", s_deepseek.currency);
+    /* small caption above the amount: the currency, or the reason there is no amount */
+    const char *caption = s_deepseek.currency;
+    if (!s_deepseek.configured) {
+        caption = "no API key";
+    } else if (!has_data) {
+        caption = s_deepseek.error[0] ? s_deepseek.error : "no data";
     }
-    lv_label_set_text(s_quota_5h_title_label, title);
-    lv_label_set_text(s_quota_5h_label, has_data ? s_deepseek.total : "--");
-    lv_obj_set_style_text_color(s_quota_5h_label, red ? lv_color_hex(0xf97066) : lv_color_hex(0xf3f4f6), 0);
+    lv_label_set_text(s_quota_5h_title_label, caption);
 
-    char detail[64];
-    if (has_data) {
-        snprintf(detail, sizeof(detail), landscape ? "Top-up %s    Gift %s" : "Top-up %s\nGift %s",
-                 s_deepseek.topped_up, s_deepseek.granted);
-    } else if (!s_deepseek.configured) {
-        snprintf(detail, sizeof(detail), landscape ? "Add DEEPSEEK key to .env" : "Add DEEPSEEK key\nto .env");
-    } else {
-        snprintf(detail, sizeof(detail), "Check: %s", s_deepseek.error[0] ? s_deepseek.error : "no data");
-    }
-    lv_label_set_text(s_quota_7d_label, detail);
-    lv_obj_set_style_text_color(s_quota_7d_label, red ? lv_color_hex(0xf97066) : lv_color_hex(0x8a9099), 0);
+    const char *amount = has_data ? s_deepseek.total : "--";
+    const size_t digits = strlen(amount);
+    const lv_font_t *font = landscape ? (digits <= 7 ? &lv_font_montserrat_32 : &lv_font_montserrat_20)
+                                      : (digits <= 6 ? &lv_font_montserrat_32 : &lv_font_montserrat_20);
+    lv_obj_set_style_text_font(s_quota_5h_label, font, 0);
+    lv_label_set_text(s_quota_5h_label, amount);
+    lv_obj_set_style_text_color(s_quota_5h_label, red ? lv_color_hex(0xf97066) : lv_color_hex(0xf3f4f6), 0);
 }
 
 static void render_state(void)

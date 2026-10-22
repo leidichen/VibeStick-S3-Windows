@@ -254,22 +254,21 @@ OAuth 令牌。我们实测到两件事:
 
 ## 6b. DeepSeek 余额页
 
-在 Codex、Claude 之外多一个页面,显示你的 DeepSeek 账户余额。右侧键双击切换。
+在 Codex、Claude 之外多一个页面,显示你的 DeepSeek 账户余额——只有这些:logo、`DeepSeek`、小号灰色的币种 `CNY`、大号的剩余金额。
+右侧键双击切换。
 
 - **数据**:bridge 每 5 分钟用你的 key 调一次 `GET https://api.deepseek.com/user/balance`(失败 60 秒后重试;蓝色键双击也会刷新,最多
   每 30 秒一次)。请求在后台线程里做,网络再慢也不会拖慢其它页面。key 从 `.env` 的 `VIBE_STICK_DEEPSEEK_API_KEY` 读取,只会发给
-  `api.deepseek.com`。
-- **页面**:logo + `DeepSeek`,状态(`OK`、`LOW`、`EMPTY`、`NO KEY`、`ERR`)、总余额,再下面是 `Top-up`(充值)和 `Gift`(赠金)。
-  竖屏、横屏都做了布局;底部一行和 Claude 页一样显示 `Upd 5m ago`。
-- **低余额**:低于 **10 元**,状态点、总额和明细行都变**红色**;DeepSeek 报告账户不可用时也是红色。阈值是 `main.c` 里的
+  `api.deepseek.com`。(bridge 也会把充值/赠金两部分发给设备,但页面不显示。)
+- **低余额**:低于 **10 元**,金额和名字旁的小圆点变**红色**(DeepSeek 报告账户不可用时也是红色)。阈值是 `main.c` 里的
   `DEEPSEEK_LOW_BALANCE_CNY`(只对人民币余额生效)。
-- **失败时**:刷新失败会继续显示上一次的数字(底部的"多久前更新"会变长并转黄/红)。还没拿到过数字时显示
-  `Check: bad key / offline / bad reply / http 500`;没配 key 显示 `NO KEY`。
-- **限制**:设备字库里没有 `¥`,所以单位写成 `CNY`;文字用英文,因为内置中文字库只含其它页面用到的那些字。DeepSeek 图标只是
-  `firmware/sticks3/tools/make_deepseek_icon.py` 画的**简易占位鲸鱼**,不是官方图案——如果你有权使用官方素材,把 PNG 放进
-  `assets/providers/deepseek/` 再运行该脚本即可。这个页面不会播放任何提示音。
+- **失败时**:刷新失败会继续显示上一次的金额(底部的 `Upd …` 会变长并转黄/红)。还没拿到过金额时,小字写 `no API key` 或原因
+  (`bad key`、`offline`、`bad reply`、`http 500`),金额显示 `--`。
+- **字体**:设备字库里没有 `¥`,所以币种写成 `CNY`。金额用 Montserrat 32(数字特别长时用 20)。
+- **logo**:`firmware/sticks3/assets/providers/deepseek/` 里放着仓库作者提供的 logo(`logo-source.svg`、`logo-whale.svg/.png`),
+  `tools/make_deepseek_icon.py` 把它转成设备用的两个图标。这是 DeepSeek 的商标图案——发布你自己的副本前请确认可以再分发,或者换掉它。
 - 思路和接口返回格式参考了开源的
-  [DeepSeek-DeskBand](https://github.com/leidichen/DeepSeek-DeskBand) 任务栏小组件(MIT),没有拷贝代码。
+  [DeepSeek-DeskBand](https://github.com/leidichen/DeepSeek-DeskBand) 任务栏小组件(MIT),没有拷贝代码。这个页面不会播放任何提示音。
 
 ## 7. bridge 的修复与性能
 

@@ -3,7 +3,7 @@
 ## Unreleased (fork)
 
 Firmware (StickS3)
-- DeepSeek balance page (logo, total, top-up, gift; red below 10 CNY), reached by the right button's double click after Claude. The bridge fetches it every 5 minutes with `VIBE_STICK_DEEPSEEK_API_KEY`.
+- DeepSeek balance page (logo, CNY and the remaining amount only; red below 10 CNY), reached by the right button's double click after Claude. The bridge fetches it every 5 minutes with `VIBE_STICK_DEEPSEEK_API_KEY`.
 - Eco mode on battery with the screen off (poll 20 s, battery sample 60 s, deeper Wi-Fi sleep); auto power-off after 30 min of it; low-battery warnings at 10 %/5 % and power-off at 2 %. Power button: single click no longer restarts, double click powers off.
 - Battery percentage uses a curve measured on the device plus a 40 mV allowance while on USB (the straight line overstated low charge). Firmware 0.1.9.
 - Right button: click = screen on/off, double click = switch provider, triple click = portrait/landscape, hold = search computers. Blue button swallowed while the screen is off.
