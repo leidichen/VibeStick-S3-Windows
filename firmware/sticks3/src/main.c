@@ -1061,33 +1061,38 @@ static void layout_ui_base(bool landscape)
 
 static void layout_deepseek(bool landscape)
 {
-    /* Balance page: only "CNY" (small, grey) above the amount (big). The quota widgets are reused. */
+    /* Balance page: logo + name at the top, then "CNY" (small, grey) and the amount (big), centred on the screen.
+     * The quota widgets are reused; everything else of the normal page is hidden. */
     lv_obj_add_flag(s_quota_5h_bar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_quota_7d_bar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_quota_7d_title_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_quota_7d_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_quota_divider, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_quota_wrap, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_align(s_quota_5h_title_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_add_flag(s_status_dot, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(s_quota_5h_label, LV_TEXT_ALIGN_CENTER, 0);
     if (!landscape) {
-        lv_obj_set_style_text_font(s_provider_label, &lv_font_montserrat_12, 0);
-        lv_obj_set_width(s_provider_label, 63);
-        lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_14, 0);
-        lv_obj_set_width(s_quota_5h_title_label, 108);
-        lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_MID, 0, 140);
-        lv_obj_set_width(s_quota_5h_label, 120);
-        lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 162);
+        /* 135x240: logo over the name, CNY over the amount, the CNY+amount block centred at y = 120 */
+        lv_obj_align(s_provider_icon, LV_ALIGN_TOP_MID, 0, 36);
+        lv_obj_set_width(s_provider_label, 135);
+        lv_obj_set_style_text_align(s_provider_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(s_provider_label, LV_ALIGN_TOP_MID, 0, 84);
+        lv_obj_set_width(s_quota_5h_title_label, 120);
+        lv_obj_set_style_text_align(s_quota_5h_title_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_MID, 0, 92);
+        lv_obj_set_width(s_quota_5h_label, 130);
+        lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 111);
         return;
     }
-    /* landscape: the full name fits next to the logo; the currency sits to the left of the amount */
+    /* 240x135: name next to the logo; amount centred on the screen, CNY at the left on the same line */
     lv_obj_set_width(s_provider_label, 110);
-    lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_14, 0);
     lv_obj_set_width(s_quota_5h_title_label, 56);
     lv_obj_set_style_text_align(s_quota_5h_title_label, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_LEFT, 12, 74);
-    lv_obj_set_width(s_quota_5h_label, 170);
-    lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_RIGHT, -6, 62);
+    lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_LEFT, 12, 59);
+    lv_obj_set_width(s_quota_5h_label, 240);
+    lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 49);
 }
 
 static void layout_ui(bool landscape)
@@ -1100,6 +1105,8 @@ static void layout_ui(bool landscape)
     lv_obj_clear_flag(s_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font(s_provider_label, &lv_font_montserrat_16, 0);
     lv_obj_set_width(s_provider_label, 60);
+    lv_obj_set_style_text_align(s_provider_label, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_clear_flag(s_status_dot, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font(s_status_label, FONT_CN, 0);
     lv_obj_set_style_text_font(s_quota_5h_label, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_font(s_quota_7d_label, &lv_font_montserrat_20, 0);
@@ -1244,15 +1251,6 @@ static void render_deepseek_body(void)
     const double total = has_data ? strtod(s_deepseek.total, NULL) : 0.0;
     const bool low = has_data && strcmp(s_deepseek.currency, "CNY") == 0 && total < DEEPSEEK_LOW_BALANCE_CNY;
     const bool red = low || (has_data && !s_deepseek.available) || (!has_data && s_deepseek.configured);
-
-    /* the status dot is the only status indicator: green ok, red low/empty/error, amber no key */
-    lv_color_t dot = lv_color_hex(0x32d583);
-    if (!s_deepseek.configured) {
-        dot = lv_color_hex(0xfdb022);
-    } else if (red) {
-        dot = lv_color_hex(0xf97066);
-    }
-    lv_obj_set_style_bg_color(s_status_dot, dot, 0);
 
     /* small caption above the amount: the currency, or the reason there is no amount */
     const char *caption = s_deepseek.currency;
