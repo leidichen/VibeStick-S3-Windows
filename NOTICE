@@ -18,6 +18,11 @@ This repository is a modified fork of VibeStick (MIT, Copyright (c) 2026 Gary Zh
 added in 280342193/VibeStick-1. The MIT licence and the copyright notices above are kept. The changes are described in
 docs/FORK_CHANGES.md and CHANGELOG.md.
 
+Acknowledgement
+The DeepSeek balance page was inspired by the open-source DeepSeek-DeskBand project (MIT,
+https://github.com/leidichen/DeepSeek-DeskBand); only the public balance endpoint and the shape of its answer were
+used, no code was copied. The DeepSeek icon shipped here is a simple placeholder drawing, not DeepSeek's artwork.
+
 Not part of this repository
 - sherpa-onnx (Apache License 2.0) and numpy (BSD) are installed by the user with `pip install "./bridge[local-asr]"`.
 - The SenseVoice speech-recognition model is downloaded by the user from the sherpa-onnx releases and has its own

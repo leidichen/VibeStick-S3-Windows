@@ -250,7 +250,7 @@ Start-ScheduledTask -TaskName "VibeStick Bridge"
 ### 电脑切换
 
 - 正常首页**单击**右侧键:亮屏 / 息屏。
-- 正常首页**双击**右侧键:切换 provider。
+- 正常首页**双击**右侧键:切换页面(Codex → Claude → DeepSeek 余额,本 fork 新增)。
 - 正常首页**连按三下**右侧键:竖屏 / 横屏。
 - 长按右侧键：搜索同一局域网内的 VibeStick bridge。
 - 搜索页面短按右侧键：选择下一个电脑。

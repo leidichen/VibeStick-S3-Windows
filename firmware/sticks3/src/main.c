@@ -95,6 +95,7 @@ typedef struct {
 typedef enum {
     PROVIDER_CODEX = 0,
     PROVIDER_CLAUDE = 1,
+    PROVIDER_DEEPSEEK = 2,
     PROVIDER_COUNT,
 } agent_provider_t;
 
@@ -141,6 +142,19 @@ typedef struct {
     int quota_age_s;          /* age at the moment the response arrived */
     int64_t quota_age_rx_ms;  /* S3 clock at that moment, so the age keeps growing even if the bridge dies */
 } provider_display_state_t;
+
+/* DeepSeek account balance (CNY). The bridge always sends it, whichever provider is active. */
+typedef struct {
+    bool configured; /* the bridge has an API key */
+    bool ok;         /* the last refresh worked */
+    bool available;  /* DeepSeek says the account can still be used */
+    char currency[8];
+    char total[16];
+    char topped_up[16];
+    char granted[16];
+    char error[16];
+} deepseek_state_t;
+#define DEEPSEEK_LOW_BALANCE_CNY 10.0 /* below this the numbers turn red */
 
 typedef struct {
     char *data;
@@ -252,7 +266,12 @@ static provider_display_state_t s_provider_states[PROVIDER_COUNT] = {
         .quota_updated_at = "",
         .quota_stale = false,
     },
+    [PROVIDER_DEEPSEEK] = {
+        .status = "OFFLINE",
+    },
 };
+static deepseek_state_t s_deepseek = {.currency = "CNY"};
+static bool s_layout_deepseek;
 
 extern const lv_font_t vibe_stick_cn_16;
 #define FONT_CN (&vibe_stick_cn_16)
@@ -275,6 +294,16 @@ static const agent_provider_config_t s_provider_configs[] = {
         .icon = &vibe_stick_provider_claude_icon_40,
         .icon_small = &vibe_stick_provider_claude_icon_32,
         .accent_color = LV_COLOR_MAKE(0xd9, 0x77, 0x57),
+        .enabled = true,
+        .implemented = true,
+    },
+    {
+        .id = PROVIDER_DEEPSEEK,
+        .key = "deepseek",
+        .display_name = "DeepSeek",
+        .icon = &vibe_stick_provider_deepseek_icon_40,
+        .icon_small = &vibe_stick_provider_deepseek_icon_32,
+        .accent_color = LV_COLOR_MAKE(0x4d, 0x6b, 0xfe),
         .enabled = true,
         .implemented = true,
     },
@@ -918,7 +947,7 @@ static const orientation_cfg_t s_orientation_cfg[2] = {
     {.swap_xy = true, .mirror_x = true, .mirror_y = false, .gap_x = 40, .gap_y = 52, .width = 240, .height = 135},
 };
 
-static void layout_ui(bool landscape)
+static void layout_ui_base(bool landscape)
 {
     const int w = landscape ? 240 : 135;
     const int h = landscape ? 135 : 240;
@@ -1028,6 +1057,62 @@ static void layout_ui(bool landscape)
     lv_obj_align(s_bridge_picker_host, LV_ALIGN_CENTER, 0, 22);
     lv_obj_set_width(s_bridge_picker_hint, 220);
     lv_obj_align(s_bridge_picker_hint, LV_ALIGN_BOTTOM_MID, 0, -10);
+}
+
+static void layout_deepseek(bool landscape)
+{
+    /* The balance page reuses the quota widgets: title+value = total, second value = "Top-up / Gift" line. */
+    lv_obj_add_flag(s_quota_5h_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_quota_7d_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_quota_7d_title_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_quota_divider, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(s_quota_5h_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_quota_7d_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_line_space(s_quota_7d_label, 4, 0);
+    if (!landscape) {
+        lv_obj_set_style_text_font(s_provider_label, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_12, 0);
+        lv_obj_set_width(s_quota_5h_title_label, 108);
+        lv_obj_set_style_text_align(s_quota_5h_title_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_MID, 0, 134);
+        lv_obj_set_width(s_quota_5h_label, 108);
+        lv_obj_set_style_text_align(s_quota_5h_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_MID, 0, 154);
+        lv_label_set_long_mode(s_quota_7d_label, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(s_quota_7d_label, 108);
+        lv_obj_set_style_text_align(s_quota_7d_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(s_quota_7d_label, LV_ALIGN_TOP_MID, 0, 186);
+        return;
+    }
+    lv_obj_set_style_text_font(s_quota_5h_title_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_width(s_quota_5h_title_label, 60);
+    lv_obj_set_style_text_align(s_quota_5h_title_label, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_LEFT, 10, 52);
+    lv_obj_set_width(s_quota_5h_label, 150);
+    lv_obj_set_style_text_align(s_quota_5h_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_RIGHT, -8, 47);
+    lv_obj_set_width(s_quota_7d_label, 224);
+    lv_obj_set_style_text_align(s_quota_7d_label, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(s_quota_7d_label, LV_ALIGN_TOP_LEFT, 10, 84);
+}
+
+static void layout_ui(bool landscape)
+{
+    /* undo whatever the balance page changed, then lay out normally */
+    lv_obj_clear_flag(s_quota_5h_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_quota_7d_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_quota_7d_title_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(s_provider_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_status_label, FONT_CN, 0);
+    lv_obj_set_style_text_font(s_quota_5h_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_quota_7d_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_line_space(s_quota_7d_label, 0, 0);
+    lv_label_set_long_mode(s_quota_7d_label, LV_LABEL_LONG_CLIP);
+    layout_ui_base(landscape);
+    if (s_layout_deepseek) {
+        layout_deepseek(landscape);
+    }
 }
 
 static void apply_orientation(int orientation)
@@ -1156,10 +1241,64 @@ static void render_bottom_label(const provider_display_state_t *display_state, b
     lv_obj_set_style_text_color(s_computer_name_label, color, 0);
 }
 
+static void render_deepseek_body(void)
+{
+    const bool landscape = s_orientation != 0;
+    const bool has_data = s_deepseek.total[0] != '\0';
+    const double total = has_data ? strtod(s_deepseek.total, NULL) : 0.0;
+    const bool low = has_data && strcmp(s_deepseek.currency, "CNY") == 0 && total < DEEPSEEK_LOW_BALANCE_CNY;
+    const bool red = low || (s_deepseek.ok && !s_deepseek.available) || (!s_deepseek.ok && s_deepseek.configured && !has_data);
+
+    const char *status = "OK";
+    lv_color_t dot = lv_color_hex(0x32d583);
+    if (!s_deepseek.configured) {
+        status = "NO KEY";
+        dot = lv_color_hex(0xfdb022);
+    } else if (!has_data) {
+        status = "ERR";
+        dot = lv_color_hex(0xf97066);
+    } else if (!s_deepseek.available) {
+        status = "EMPTY";
+        dot = lv_color_hex(0xf97066);
+    } else if (low) {
+        status = "LOW";
+        dot = lv_color_hex(0xf97066);
+    }
+    lv_label_set_text(s_status_label, status);
+    lv_obj_set_style_bg_color(s_status_dot, dot, 0);
+
+    char title[24];
+    if (landscape) {
+        snprintf(title, sizeof(title), "Total");
+    } else {
+        snprintf(title, sizeof(title), "Balance %s", s_deepseek.currency);
+    }
+    lv_label_set_text(s_quota_5h_title_label, title);
+    lv_label_set_text(s_quota_5h_label, has_data ? s_deepseek.total : "--");
+    lv_obj_set_style_text_color(s_quota_5h_label, red ? lv_color_hex(0xf97066) : lv_color_hex(0xf3f4f6), 0);
+
+    char detail[64];
+    if (has_data) {
+        snprintf(detail, sizeof(detail), landscape ? "Top-up %s    Gift %s" : "Top-up %s\nGift %s",
+                 s_deepseek.topped_up, s_deepseek.granted);
+    } else if (!s_deepseek.configured) {
+        snprintf(detail, sizeof(detail), landscape ? "Add DEEPSEEK key to .env" : "Add DEEPSEEK key\nto .env");
+    } else {
+        snprintf(detail, sizeof(detail), "Check: %s", s_deepseek.error[0] ? s_deepseek.error : "no data");
+    }
+    lv_label_set_text(s_quota_7d_label, detail);
+    lv_obj_set_style_text_color(s_quota_7d_label, red ? lv_color_hex(0xf97066) : lv_color_hex(0x8a9099), 0);
+}
+
 static void render_state(void)
 {
     lvgl_lock();
     const agent_provider_config_t *provider = current_provider_config();
+    const bool is_deepseek = provider->id == PROVIDER_DEEPSEEK;
+    if (is_deepseek != s_layout_deepseek) {
+        s_layout_deepseek = is_deepseek;
+        layout_ui(s_orientation != 0);
+    }
     const provider_display_state_t *display_state = current_provider_display_state();
     const bool implemented = provider->implemented;
     const bool q5_valid = implemented && display_state->quota_5h_valid;
@@ -1185,9 +1324,18 @@ static void render_state(void)
     }
     lv_label_set_text(s_provider_label, provider->display_name);
     lv_obj_set_style_text_color(s_provider_label, provider->implemented ? lv_color_hex(0xf3f4f6) : lv_color_hex(0xd7d9de), 0);
-    lv_label_set_text(s_status_label, status_text);
-    set_status_color(provider, status_key);
     render_bottom_label(display_state, implemented);
+    if (is_deepseek) {
+        render_deepseek_body();
+        lv_label_set_text(s_quota_status_label, "");
+        lv_obj_add_flag(s_quota_status_label, LV_OBJ_FLAG_HIDDEN);
+        lvgl_unlock();
+        return;
+    }
+    lv_label_set_text(s_status_label, status_text);
+    lv_obj_set_style_text_color(s_quota_5h_label, lv_color_hex(0xf3f4f6), 0);
+    lv_obj_set_style_text_color(s_quota_7d_label, lv_color_hex(0xf3f4f6), 0);
+    set_status_color(provider, status_key);
     set_quota_title(s_quota_5h_title_label, "5H", quota_stale);
     set_quota_title(s_quota_7d_title_label, "7D", quota_stale);
     set_quota_label(s_quota_5h_bar, s_quota_5h_label, display_state->quota_5h,
@@ -1757,6 +1905,34 @@ static void parse_provider_json(cJSON *state_root, cJSON *provider)
              display_state->quota_stale);
 }
 
+static void parse_deepseek_json(cJSON *root)
+{
+    cJSON *ds = cJSON_GetObjectItemCaseSensitive(root, "deepseek");
+    if (!cJSON_IsObject(ds)) {
+        return;
+    }
+    s_deepseek.configured = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(ds, "configured"));
+    s_deepseek.ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(ds, "ok"));
+    s_deepseek.available = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(ds, "available"));
+    copy_json_string(ds, "currency", s_deepseek.currency, sizeof(s_deepseek.currency));
+    copy_json_string(ds, "total", s_deepseek.total, sizeof(s_deepseek.total));
+    copy_json_string(ds, "topped_up", s_deepseek.topped_up, sizeof(s_deepseek.topped_up));
+    copy_json_string(ds, "granted", s_deepseek.granted, sizeof(s_deepseek.granted));
+    copy_json_string(ds, "error", s_deepseek.error, sizeof(s_deepseek.error));
+    if (s_deepseek.currency[0] == '\0') {
+        strlcpy(s_deepseek.currency, "CNY", sizeof(s_deepseek.currency));
+    }
+    provider_display_state_t *age_state = provider_display_state(PROVIDER_DEEPSEEK);
+    cJSON *age = cJSON_GetObjectItemCaseSensitive(ds, "age_s");
+    if (cJSON_IsNumber(age) && age->valuedouble >= 0) {
+        age_state->quota_age_valid = true;
+        age_state->quota_age_s = age->valuedouble > 2000000000.0 ? 2000000000 : (int)age->valuedouble;
+        age_state->quota_age_rx_ms = now_ms();
+    } else {
+        age_state->quota_age_valid = false;
+    }
+}
+
 static void parse_codex_json(cJSON *codex)
 {
     provider_display_state_t *display_state = provider_display_state(PROVIDER_CODEX);
@@ -1790,6 +1966,7 @@ static bool parse_state_json(const char *json)
     s_state.wifi = cJSON_IsBool(wifi) ? cJSON_IsTrue(wifi) : s_state.wifi;
     s_state.ble = cJSON_IsBool(ble) ? cJSON_IsTrue(ble) : s_state.ble;
 
+    parse_deepseek_json(state_root);
     cJSON *provider = cJSON_GetObjectItemCaseSensitive(state_root, "provider");
     cJSON *codex = cJSON_GetObjectItemCaseSensitive(state_root, "codex");
     if (cJSON_IsObject(provider)) {

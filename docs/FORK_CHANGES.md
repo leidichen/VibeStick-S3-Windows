@@ -35,7 +35,7 @@ left side (portrait, screen facing you).
 | Blue front button | Double click | Refresh the quota now (otherwise every 5 min) |
 | Blue front button | Any gesture while the screen is **off** | Only wakes the screen; the gesture itself is swallowed |
 | Right button | **Single click** | **Screen on / off** (while the computer picker is open: *next computer*) |
-| Right button | **Double click** | **Switch provider** (Codex ⇄ Claude) |
+| Right button | **Double click** | **Switch page**: Codex → Claude → DeepSeek balance → Codex |
 | Right button | **Triple click** | **Portrait ⇄ landscape** (remembered across reboots) |
 | Right button | Hold (450 ms) | Search for bridges on the LAN (computer picker) |
 | Left power button | Single click | Does nothing (the power-management chip would otherwise **restart** the device; the firmware now disables that) |
@@ -292,6 +292,27 @@ Unit-tested against a fake CLI, and the real `claude -p …` command was run onc
 (about 7 s, exit code 0, no session file written). The **automatic trigger at a real token expiry has not been
 observed yet** — look for the `claude login refresh` log line on your first day.
 
+## 6b. DeepSeek balance page
+
+A third page next to Codex and Claude shows your DeepSeek account balance. Switch with a double click on the right button.
+
+- **Data:** the bridge calls `GET https://api.deepseek.com/user/balance` with your key every 5 minutes (retry after 60 s on a failure;
+  the blue button's double click also refreshes it, at most every 30 s). The call runs in a background thread, so a slow
+  network never delays the other pages. The key is read from `VIBE_STICK_DEEPSEEK_API_KEY` in `.env` and is only ever sent
+  to `api.deepseek.com`.
+- **Page:** logo + `DeepSeek`, a status (`OK`, `LOW`, `EMPTY`, `NO KEY`, `ERR`), the total balance, then `Top-up` (paid) and
+  `Gift` (granted) amounts. Portrait and landscape are both laid out; the bottom line says `Upd 5m ago` like the Claude page.
+- **Low balance:** below **10 CNY** the status dot, the total and the detail line turn **red**. The same happens if DeepSeek reports the
+  account as unavailable. The threshold is `DEEPSEEK_LOW_BALANCE_CNY` in `main.c` (only applied to CNY balances).
+- **Failures:** a failed refresh keeps showing the last good numbers (the age line grows and turns amber/red). With no numbers
+  yet the page says `Check: bad key / offline / bad reply / http 500`; without a key it says `NO KEY`.
+- **Limits:** the device font has no `¥`, so the unit is written as `CNY`; texts are English because the built-in Chinese
+  font only contains the characters of the other pages. The DeepSeek icon is a **simple placeholder** whale drawn by
+  `firmware/sticks3/tools/make_deepseek_icon.py`, not the official artwork — drop real PNGs into
+  `assets/providers/deepseek/` and rerun the script if you are allowed to use them. This page never plays alert sounds.
+- The idea and the shape of the API answer come from the open-source
+  [DeepSeek-DeskBand](https://github.com/leidichen/DeepSeek-DeskBand) taskbar widget (MIT); no code was copied.
+
 ## 7. Bridge fixes and performance
 
 - **Intermittent "task finished" alert.** The finished-turn alert required the `end_turn` record to be the newest
@@ -323,6 +344,7 @@ All optional; see `.env.example`.
 | `VIBE_STICK_CLAUDE_TOKEN_REFRESH` | on | Renew the Claude Code login when it expired |
 | `VIBE_STICK_CLAUDE_CLI` | `claude` on PATH | Path to the Claude Code executable |
 | `VIBE_STICK_BATTERY_LOG` | app data folder | CSV for battery telemetry |
+| `VIBE_STICK_DEEPSEEK_API_KEY` | – | Enables the DeepSeek balance page (see §6b) |
 
 Config precedence (unchanged from upstream): the bridge reads `<app data>/VibeStick/.env` **first**, then `./.env`;
 the first definition of a variable wins. A stale copy in the app-data folder will override the one you are editing.

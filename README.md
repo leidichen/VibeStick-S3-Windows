@@ -25,7 +25,7 @@ VibeStick targets M5Stack StickS3 hardware and is not an official M5Stack projec
 | Blue front button | Hold (300 ms) | Cue tone, then record while held; release to transcribe and paste |
 | Blue front button | Click / double click | Enter on the computer / refresh quota |
 | Right button | **Click** | **Screen on / off** (the screen never turns off by itself) |
-| Right button | **Double click** | **Switch provider** (Codex ⇄ Claude) |
+| Right button | **Double click** | **Switch page** (Codex → Claude → DeepSeek balance) |
 | Right button | **Triple click** | **Portrait ⇄ landscape** |
 | Right button | Hold | Search for computers on the LAN |
 

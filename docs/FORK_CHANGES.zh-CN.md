@@ -33,7 +33,7 @@ StickS3 有三个键:**正面蓝色键**、**右侧键**、以及机身**左侧�
 | 蓝色键 | 双击 | 立即刷新额度(平时每 5 分钟刷新一次) |
 | 蓝色键 | 屏幕**熄灭**时的任何手势 | 只点亮屏幕,手势本身被吞掉,不会误触发 |
 | 右侧键 | **单击** | **亮屏 / 息屏**(电脑搜索页打开时,单击 = *选下一台电脑*) |
-| 右侧键 | **双击** | **切换 provider**(Codex ⇄ Claude) |
+| 右侧键 | **双击** | **切换页面**:Codex → Claude → DeepSeek 余额 → Codex |
 | 右侧键 | **连按三下** | **竖屏 ⇄ 横屏**(掉电后仍记住) |
 | 右侧键 | 长按(450 ms) | 搜索局域网里的 bridge(电脑选择页) |
 | 左侧电源键 | 单击 | 不做任何事(原本电源管理芯片会让设备**重启**,固件现在把这个功能关掉了) |
@@ -252,6 +252,25 @@ OAuth 令牌。我们实测到两件事:
 已经用假 CLI 做了单元测试,也用真实的 `claude -p …` 命令从 bridge 的 Python 里手动跑过一次(约 7 秒,退出码 0,没有写会话文件)。
 **令牌真正过期时的自动触发还没有被观察到**——请在第一天留意日志里的 `claude login refresh`。
 
+## 6b. DeepSeek 余额页
+
+在 Codex、Claude 之外多一个页面,显示你的 DeepSeek 账户余额。右侧键双击切换。
+
+- **数据**:bridge 每 5 分钟用你的 key 调一次 `GET https://api.deepseek.com/user/balance`(失败 60 秒后重试;蓝色键双击也会刷新,最多
+  每 30 秒一次)。请求在后台线程里做,网络再慢也不会拖慢其它页面。key 从 `.env` 的 `VIBE_STICK_DEEPSEEK_API_KEY` 读取,只会发给
+  `api.deepseek.com`。
+- **页面**:logo + `DeepSeek`,状态(`OK`、`LOW`、`EMPTY`、`NO KEY`、`ERR`)、总余额,再下面是 `Top-up`(充值)和 `Gift`(赠金)。
+  竖屏、横屏都做了布局;底部一行和 Claude 页一样显示 `Upd 5m ago`。
+- **低余额**:低于 **10 元**,状态点、总额和明细行都变**红色**;DeepSeek 报告账户不可用时也是红色。阈值是 `main.c` 里的
+  `DEEPSEEK_LOW_BALANCE_CNY`(只对人民币余额生效)。
+- **失败时**:刷新失败会继续显示上一次的数字(底部的"多久前更新"会变长并转黄/红)。还没拿到过数字时显示
+  `Check: bad key / offline / bad reply / http 500`;没配 key 显示 `NO KEY`。
+- **限制**:设备字库里没有 `¥`,所以单位写成 `CNY`;文字用英文,因为内置中文字库只含其它页面用到的那些字。DeepSeek 图标只是
+  `firmware/sticks3/tools/make_deepseek_icon.py` 画的**简易占位鲸鱼**,不是官方图案——如果你有权使用官方素材,把 PNG 放进
+  `assets/providers/deepseek/` 再运行该脚本即可。这个页面不会播放任何提示音。
+- 思路和接口返回格式参考了开源的
+  [DeepSeek-DeskBand](https://github.com/leidichen/DeepSeek-DeskBand) 任务栏小组件(MIT),没有拷贝代码。
+
 ## 7. bridge 的修复与性能
 
 - **"任务完成"提示音时有时无。** 原来的判断要求 `end_turn` 记录是**所有会话里**最新的一条。但 Claude Code 在有 Stop hook 时,会在一轮结束约
@@ -278,6 +297,7 @@ OAuth 令牌。我们实测到两件事:
 | `VIBE_STICK_CLAUDE_TOKEN_REFRESH` | 开 | Claude Code 登录过期时自动续期 |
 | `VIBE_STICK_CLAUDE_CLI` | PATH 里的 `claude` | Claude Code 可执行文件路径 |
 | `VIBE_STICK_BATTERY_LOG` | 应用数据目录 | 电池遥测 CSV 位置 |
+| `VIBE_STICK_DEEPSEEK_API_KEY` | – | 启用 DeepSeek 余额页(见 §6b) |
 
 配置读取顺序(与上游一致):bridge **先**读 `<应用数据目录>/VibeStick/.env`,再读 `./.env`;同一变量以先读到的为准。应用数据目录里
 遗留的旧副本会覆盖你正在编辑的那份。

@@ -39,12 +39,14 @@ from vibe_stick.protocol.state import (
     VibeStickState,
     AgentStatus,
     CodexState,
+    DeepSeekState,
     ProviderState,
     default_state,
     event_id,
     now_time_text,
     state_from_dict,
 )
+from vibe_stick.deepseek.balance import BalanceCache
 from vibe_stick.providers.base import ProviderObservation
 from vibe_stick.providers.claude import observe_claude
 from vibe_stick.providers.codex import observe_codex
@@ -76,6 +78,7 @@ class BridgeStateStore:
         self._claude_quota = load_quota(CLAUDE_QUOTA_PATH)
         if not _has_quota(self._claude_quota):
             self._claude_quota = _claude_quota_from_state(self._state)
+        self._deepseek = BalanceCache()
         self._claude_usage_last_attempt = 0.0
         self._claude_usage_last_success = 0.0
         quota = load_quota(QUOTA_PATH)
@@ -122,6 +125,7 @@ class BridgeStateStore:
             return self._state
 
     def refresh_quota_locked(self) -> None:
+        self._apply_deepseek(force=True)
         if self._state.active_provider == "claude":
             self._refresh_claude_usage_locked(force=True)
             self._state.provider = _provider_state_from_observation(
@@ -195,6 +199,7 @@ class BridgeStateStore:
 
         self._state.codex = _codex_state_from_observation(codex_observation)
         self._state.provider = _provider_state_from_observation(active_observation)
+        self._apply_deepseek(force=False)
         self._apply_alert_from_observation(
             _select_alert_observation(active_observation, codex_observation, claude_observation)
         )
@@ -320,6 +325,19 @@ class BridgeStateStore:
         except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
             return default_state()
 
+    def _apply_deepseek(self, *, force: bool) -> None:
+        balance = self._deepseek.snapshot(force=force)
+        self._state.deepseek = DeepSeekState(
+            configured=balance.configured,
+            ok=balance.ok,
+            available=balance.available,
+            currency=balance.currency,
+            total=balance.total,
+            topped_up=balance.topped_up,
+            granted=balance.granted,
+            error=balance.error,
+        )
+
     def _quota_age_seconds(self) -> int | None:
         """Seconds since the active provider's quota numbers were really fetched; None if unknown."""
         if self._state.provider.id != "claude":
@@ -331,6 +349,7 @@ class BridgeStateStore:
 
     def _save_state_locked(self) -> None:
         self._state.provider.quota_age_s = self._quota_age_seconds()
+        self._state.deepseek.age_s = self._deepseek.age_seconds()
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         STATE_PATH.write_text(json.dumps(self._state.to_jsonable(), indent=2) + "\n")
 

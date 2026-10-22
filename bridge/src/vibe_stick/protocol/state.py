@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -46,6 +46,19 @@ class ProviderState:
 
 
 @dataclass
+class DeepSeekState:
+    configured: bool = False
+    ok: bool = False
+    available: bool = False
+    currency: str = "CNY"
+    total: str = ""
+    topped_up: str = ""
+    granted: str = ""
+    error: str = ""
+    age_s: int | None = None  # seconds since the balance was really fetched, computed when the state is saved
+
+
+@dataclass
 class AlertState:
     event_id: str = ""
     type: AlertType = AlertType.NONE
@@ -63,6 +76,7 @@ class VibeStickState:
     provider: ProviderState
     codex: CodexState
     alert: AlertState
+    deepseek: DeepSeekState = field(default_factory=DeepSeekState)
 
     def to_jsonable(self) -> dict[str, Any]:
         data = asdict(self)
@@ -108,6 +122,24 @@ def state_from_dict(data: dict[str, Any]) -> VibeStickState:
             type=AlertType(alert_data.get("type", AlertType.NONE.value)),
             message=str(alert_data.get("message") or ""),
         ),
+        deepseek=_deepseek_from_dict(data.get("deepseek")),
+    )
+
+
+def _deepseek_from_dict(raw: Any) -> DeepSeekState:
+    if not isinstance(raw, dict):
+        return DeepSeekState()
+    age = raw.get("age_s")
+    return DeepSeekState(
+        configured=bool(raw.get("configured", False)),
+        ok=bool(raw.get("ok", False)),
+        available=bool(raw.get("available", False)),
+        currency=str(raw.get("currency") or "CNY"),
+        total=str(raw.get("total") or ""),
+        topped_up=str(raw.get("topped_up") or ""),
+        granted=str(raw.get("granted") or ""),
+        error=str(raw.get("error") or ""),
+        age_s=age if isinstance(age, int) else None,
     )
 
 
